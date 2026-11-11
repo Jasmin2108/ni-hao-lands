@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <link rel="icon" type="image/png" href="/favicon.png" />
   <title>Ni Hao Lands — unofficial fan MMO</title>
   <link rel="stylesheet" href="/styles.css" />
@@ -60,6 +60,18 @@
         <button type="button" id="report-picture" hidden>Report picture</button>
       </div>
       <div id="action-label" hidden></div>
+      <div id="zone-banner" hidden></div>
+      <div id="levelup-fanfare" hidden>
+        <div class="fanfare-card">
+          <p class="eyebrow">Level up</p>
+          <p id="fanfare-text"></p>
+        </div>
+      </div>
+      <div id="zoom-controls">
+        <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+        <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+      </div>
+      <button type="button" id="panel-toggle" hidden>Skills & items</button>
     </div>
 
     <aside class="panel">
@@ -83,11 +95,15 @@
         <button data-tab="bank">Bank</button>
         <button data-tab="premium">Premium</button>
         <button data-tab="ranks">Ranks</button>
+        <button data-tab="quests">Quests</button>
       </div>
       <div id="tab-skills" class="tab on"></div>
       <div id="tab-inv" class="tab"></div>
       <div id="tab-shop" class="tab"></div>
       <div id="tab-bank" class="tab"></div>
+      <div id="tab-quests" class="tab">
+        <div id="quests-list"></div>
+      </div>
       <div id="tab-ranks" class="tab">
         <div class="ranks-periods" role="tablist" aria-label="Leaderboard period">
           <button type="button" data-period="week">Weekly</button>
@@ -114,6 +130,7 @@
     </aside>
 
     <div class="chat-dock">
+      <button type="button" id="chat-toggle">Chat <span id="chat-unread" hidden>0</span></button>
       <div id="chat-log" class="chat-log"></div>
       <form id="chat-form">
         <input id="chat-input" maxlength="140" placeholder="Say 你好 to the village…" autocomplete="off" />
@@ -129,6 +146,8 @@
       · Companion token CA: <span id="companion-ca" class="placeholder"><!-- COMPANION_TOKEN_CA_PLACEHOLDER -->TBA — paste address here after launch</span>
     </footer>
   </div>
+
+  <div id="context-menu" hidden></div>
 
   <div id="name-prompt" hidden>
     <div class="modal-card">

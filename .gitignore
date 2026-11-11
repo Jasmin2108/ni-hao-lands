@@ -2,3 +2,7 @@ node_modules/
 data/
 *.log
 ranks-screenshot.png
+picker-screenshot.png
+world-*.png
+mobile-*.png
+screenshot.png

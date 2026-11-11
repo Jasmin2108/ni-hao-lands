@@ -18,7 +18,7 @@ const lb = require("./leaderboard.js");
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ARG = process.argv[2] || "";
 
-const BOARDS = ["fishing", "yarn", "mining", "cooking", "combat", "total", "gold", "fish", "kills"];
+const BOARDS = ["fishing", "yarn", "woodcutting", "mining", "smithing", "cooking", "combat", "total", "gold", "fish", "kills"];
 const HIDDEN = ["PersistTest1", "PickerShotX", "WalletCat", "Scout123456", "Jasmin654321"];
 
 function sleep(ms) {

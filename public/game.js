@@ -35,6 +35,13 @@
     companionMint: null,
     wallet: null,
     t0: performance.now(),
+    zoom: 1,
+    quests: [],
+    smeltRecipes: [],
+    smithRecipes: [],
+    chatCollapsed: false,
+    chatUnread: 0,
+    namePrompted: false,
   };
 
   const canvas = $("view");
@@ -233,6 +240,7 @@
       } catch {}
     }
     renderAvatarGrid(avatars);
+    setWalletDeepLinks(!findWalletProvider());
   }
 
   function connect(hello) {
@@ -283,7 +291,11 @@
         resize();
         maybeUploadPending();
         maybeHolderCheck();
+        state.quests = msg.quests || [];
+        state.smeltRecipes = msg.smeltRecipes || [];
+        state.smithRecipes = msg.smithRecipes || [];
         maybeNamePrompt();
+        applyMobileChrome();
         break;
       case "state":
         state.players = msg.players || [];
@@ -331,6 +343,12 @@
         if (!$("login").hidden) showLoginError(msg.text);
         else toast(msg.text);
         break;
+      case "levelup":
+        showFanfare((msg.name || msg.skill) + " level " + msg.level + "!");
+        break;
+      case "zone":
+        showZoneBanner(msg.zone && msg.zone.name);
+        break;
     }
   }
 
@@ -348,14 +366,17 @@
     const al = $("action-label");
     if (me.action) {
       al.hidden = false;
-      al.textContent = me.action === "gather" ? "Working…" : me.action === "cook" ? "Cooking…" : me.action === "combat" ? "Fighting…" : "Busy…";
+      const actionLabel = { gather: "Working…", cook: "Cooking…", smelt: "Smelting…", smith: "Smithing…", combat: "Fighting…" };
+      al.textContent = actionLabel[me.action] || "Busy…";
     } else al.hidden = true;
   }
 
   const RANK_BOARDS = [
     { id: "fishing", name: "Fishing" },
     { id: "yarn", name: "Yarn-gathering" },
+    { id: "woodcutting", name: "Woodcutting" },
     { id: "mining", name: "Mining" },
+    { id: "smithing", name: "Smithing" },
     { id: "cooking", name: "Cooking" },
     { id: "combat", name: "Combat" },
     { id: "total", name: "Total level" },
@@ -489,6 +510,12 @@
     state.tab = id;
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + id));
+    if (isMobileLayout() && document.body.classList.contains("panel-collapsed")) {
+      document.body.classList.remove("panel-collapsed");
+      const toggle = $("panel-toggle");
+      if (toggle) toggle.textContent = "Hide panel";
+      resize();
+    }
     refreshTabs();
     if (id === "ranks") startRanksRefresh();
     else stopRanksRefresh();
@@ -515,7 +542,7 @@
     }
 
     const inv = $("tab-inv");
-    inv.innerHTML = `<p class="fine">Click a cosmetic to wear it, cooked fish to eat, or other items to sell (when at the shop).</p>`;
+    inv.innerHTML = `<p class="fine">Tap a tool or piece of gear to equip it, food to eat, or other items to sell at Merchant Mao. Right-click / long-press inventory to bank.</p>`;
     const grid = document.createElement("div");
     grid.className = "slots";
     (me.inventory || []).forEach((it) => {
@@ -525,7 +552,7 @@
       b.innerHTML = `${esc(def.name || it.id)}<span class="qty">${it.qty > 1 ? it.qty : ""}</span>`;
       b.title = def.desc || it.id;
       b.addEventListener("click", () => {
-        if (def.cosmetic) send({ type: "equip", itemId: it.id });
+        if (def.slot) send({ type: "equip", itemId: it.id });
         else if (def.heal) send({ type: "eat", itemId: it.id });
         else if (def.sell) {
           if (confirm(`Sell 1× ${def.name} for ${def.sell} gold? (You must be at Merchant Mao.)`)) {
@@ -552,6 +579,26 @@
       p.className = "fine";
       p.textContent = "Wearing: " + worn.map(itemName).join(", ");
       inv.appendChild(p);
+    }
+
+    const qlist = $("quests-list");
+    if (qlist) {
+      const defs = state.quests || [];
+      const progress = (me.quests) || {};
+      qlist.innerHTML = defs.length ? "" : `<p class="fine">No quests yet. Talk to Old Maneki or Chef Chou.</p>`;
+      for (const q of defs) {
+        const st = progress[q.id] || { step: 0, done: false };
+        const div = document.createElement("div");
+        div.className = "quest" + (st.done ? " done" : "");
+        const stepIndex = st.done ? (q.steps || []).length : Math.max(0, (st.step || 0) - 1);
+        const steps = (q.steps || []).map((line, i) => {
+          const cls = st.done || i < stepIndex ? "done" : (i === stepIndex && st.step > 0 ? "current" : "");
+          return `<li class="${cls}">${esc(line)}</li>`;
+        }).join("");
+        const status = st.done ? "Complete" : st.step > 0 ? "In progress" : "Not started — talk to the giver";
+        div.innerHTML = `<h3>${esc(q.name)}</h3><p class="fine">${esc(status)}</p><ol>${steps}</ol>`;
+        qlist.appendChild(div);
+      }
     }
 
     const shop = $("tab-shop");
@@ -629,6 +676,10 @@
     }
     log.appendChild(line);
     if (atBottom || stick) log.scrollTop = log.scrollHeight;
+    if (document.body.classList.contains("chat-collapsed") && stick) {
+      state.chatUnread = (state.chatUnread || 0) + 1;
+      updateChatUnread();
+    }
   }
 
   function toast(text) {
@@ -637,6 +688,70 @@
     d.textContent = text;
     box.appendChild(d);
     setTimeout(() => d.remove(), 2800);
+  }
+
+  function tilePx() {
+    return TILE * (state.zoom || 1);
+  }
+
+  function setZoom(z) {
+    state.zoom = Math.max(0.6, Math.min(1.8, Math.round(z * 20) / 20));
+  }
+
+  function isMobileLayout() {
+    return window.matchMedia && window.matchMedia("(max-width: 820px), (orientation: landscape) and (max-height: 540px)").matches;
+  }
+
+  function applyMobileChrome(forceDefaults) {
+    const mobile = isMobileLayout();
+    const crossed = applyMobileChrome.wasMobile !== mobile;
+    applyMobileChrome.wasMobile = mobile;
+    if (forceDefaults || crossed) {
+      if (mobile) {
+        document.body.classList.add("chat-collapsed", "panel-collapsed");
+      } else {
+        document.body.classList.remove("chat-collapsed", "panel-collapsed");
+      }
+    }
+    document.body.classList.toggle("playing", !$("game").hidden);
+    const toggle = $("panel-toggle");
+    if (toggle) {
+      toggle.hidden = !mobile;
+      toggle.textContent = document.body.classList.contains("panel-collapsed") ? "Skills & items" : "Hide panel";
+    }
+    updateChatUnread();
+    resize();
+  }
+
+  function updateChatUnread() {
+    const badge = $("chat-unread");
+    if (!badge) return;
+    const n = state.chatUnread || 0;
+    badge.hidden = n <= 0;
+    badge.textContent = n > 9 ? "9+" : String(n);
+  }
+
+  function showZoneBanner(name) {
+    const el = $("zone-banner");
+    if (!el || !name) return;
+    el.textContent = name;
+    el.hidden = false;
+    el.classList.add("show");
+    clearTimeout(showZoneBanner.timer);
+    showZoneBanner.timer = setTimeout(() => {
+      el.classList.remove("show");
+      setTimeout(() => { el.hidden = true; }, 300);
+    }, 1800);
+  }
+
+  function showFanfare(text) {
+    const el = $("levelup-fanfare");
+    const tx = $("fanfare-text");
+    if (!el) return;
+    if (tx) tx.textContent = text;
+    el.hidden = false;
+    clearTimeout(showFanfare.timer);
+    showFanfare.timer = setTimeout(() => { el.hidden = true; }, 2200);
   }
 
   let examinePinnedUntil = 0;
@@ -671,15 +786,16 @@
     canvas.height = Math.max(240, r.height) * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
-  window.addEventListener("resize", resize);
+  window.addEventListener("resize", () => { applyMobileChrome(); });
 
   function tileAt(sx, sy) {
     if (!state.world) return null;
     const rect = canvas.getBoundingClientRect();
+    const T = tilePx();
     const x = (sx - rect.left) + state.camX;
     const y = (sy - rect.top) + state.camY;
-    const tx = Math.floor(x / TILE);
-    const ty = Math.floor(y / TILE);
+    const tx = Math.floor(x / T);
+    const ty = Math.floor(y / T);
     if (tx < 0 || ty < 0 || tx >= state.world.W || ty >= state.world.H) return null;
     return { tx, ty, x, y };
   }
@@ -711,30 +827,149 @@
     }
   });
 
-  canvas.addEventListener("click", (e) => {
-    const t = tileAt(e.clientX, e.clientY);
-    if (!t) return;
-    state.clickFx = { x: t.tx, y: t.ty, t: performance.now() };
-    const ent = entityAt(t.tx, t.ty);
+  function actOnEntity(ent, t) {
     if (ent && ent.kind === "player") {
       showExamine(ent.e.name, { pin: true, reportName: ent.e.name, reportAvatar: ent.e.avatar });
       return;
     }
-    if (ent) {
-      send({ type: "interact", id: ent.e.id });
+    if (ent) send({ type: "interact", id: ent.e.id });
+    else if (t) send({ type: "move", x: t.tx, y: t.ty });
+  }
+
+  function hideContextMenu() {
+    const menu = $("context-menu");
+    if (menu) { menu.hidden = true; menu.innerHTML = ""; }
+  }
+
+  function showContextMenu(clientX, clientY, ent, t) {
+    const menu = $("context-menu");
+    if (!menu) return;
+    const items = [];
+    if (ent && ent.kind === "node") {
+      items.push({ label: nodeActionName(ent.e), fn: () => send({ type: "interact", id: ent.e.id }) });
+      if (ent.e.type === "furnace") {
+        for (const r of state.smeltRecipes || []) {
+          items.push({ label: r.label || r.product, fn: () => send({ type: "interact", id: ent.e.id, recipe: r.id || r.product }) });
+        }
+      }
+      if (ent.e.type === "anvil") {
+        for (const r of (state.smithRecipes || []).slice(0, 8)) {
+          items.push({ label: r.label || r.product, fn: () => send({ type: "interact", id: ent.e.id, recipe: r.product }) });
+        }
+      }
+      items.push({ label: "Examine", fn: () => showExamine(nodeLabel(ent.e) + (ent.e.depleted ? " (depleted)" : ""), { pin: true }) });
+    } else if (ent && ent.kind === "npc") {
+      items.push({ label: "Talk", fn: () => send({ type: "interact", id: ent.e.id }) });
+      items.push({ label: "Examine", fn: () => showExamine(ent.e.name + " — " + (ent.e.examine || ""), { pin: true }) });
+    } else if (ent && ent.kind === "mob") {
+      items.push({ label: "Attack", fn: () => send({ type: "interact", id: ent.e.id }) });
+      items.push({ label: "Examine", fn: () => showExamine(ent.e.name + " (lvl " + (ent.e.level || 1) + ", " + ent.e.hp + "/" + ent.e.maxHp + ")", { pin: true }) });
+    } else if (ent && ent.kind === "player") {
+      items.push({ label: "Examine", fn: () => showExamine(ent.e.name, { pin: true, reportName: ent.e.name, reportAvatar: ent.e.avatar }) });
     } else {
-      send({ type: "move", x: t.tx, y: t.ty });
+      items.push({ label: "Walk here", fn: () => send({ type: "move", x: t.tx, y: t.ty }) });
     }
+    menu.innerHTML = "";
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = it.label;
+      b.addEventListener("click", (ev) => { ev.stopPropagation(); hideContextMenu(); it.fn(); });
+      menu.appendChild(b);
+    }
+    menu.hidden = false;
+    const pad = 8;
+    const x = Math.min(clientX, window.innerWidth - 180 - pad);
+    const y = Math.min(clientY, window.innerHeight - items.length * 44 - pad);
+    menu.style.left = Math.max(pad, x) + "px";
+    menu.style.top = Math.max(pad, y) + "px";
+  }
+
+  canvas.addEventListener("click", (e) => {
+    if (state.suppressClick) { state.suppressClick = false; return; }
+    hideContextMenu();
+    const t = tileAt(e.clientX, e.clientY);
+    if (!t) return;
+    state.clickFx = { x: t.tx, y: t.ty, t: performance.now() };
+    actOnEntity(entityAt(t.tx, t.ty), t);
   });
 
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const t = tileAt(e.clientX, e.clientY);
+    if (!t) return;
+    showContextMenu(e.clientX, e.clientY, entityAt(t.tx, t.ty), t);
+  });
+
+  document.addEventListener("click", (e) => {
+    const menu = $("context-menu");
+    if (menu && !menu.hidden && !menu.contains(e.target)) hideContextMenu();
+  });
+
+  // Long-press = context menu; pinch = zoom. Prevent the following click.
+  let pressTimer = 0, pressStart = null, pinchStart = null;
+  canvas.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      clearTimeout(pressTimer);
+      pressStart = null;
+      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      pinchStart = { dist: d, zoom: state.zoom || 1 };
+      e.preventDefault();
+      return;
+    }
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      pressStart = { x: touch.clientX, y: touch.clientY };
+      pressTimer = setTimeout(() => {
+        const t = tileAt(touch.clientX, touch.clientY);
+        if (!t) return;
+        state.suppressClick = true;
+        showContextMenu(touch.clientX, touch.clientY, entityAt(t.tx, t.ty), t);
+      }, 450);
+    }
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    if (e.touches.length === 2 && pinchStart) {
+      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      setZoom(pinchStart.zoom * (d / (pinchStart.dist || 1)));
+      return;
+    }
+    if (pressStart && e.touches[0]) {
+      const dx = e.touches[0].clientX - pressStart.x;
+      const dy = e.touches[0].clientY - pressStart.y;
+      if (Math.hypot(dx, dy) > 12) { clearTimeout(pressTimer); pressStart = null; }
+    }
+  }, { passive: false });
+  canvas.addEventListener("touchend", (e) => {
+    clearTimeout(pressTimer);
+    pinchStart = null;
+    e.preventDefault();
+  }, { passive: false });
 
   function nodeLabel(n) {
+    if (n.label) return n.label + (n.level ? " (lvl " + n.level + ")" : "");
     if (n.type === "fish") return "Fishing spot";
     if (n.type === "yarn") return "Yarn bush";
     if (n.type === "ore") return "Ore rock";
+    if (n.type === "tree") return "Tree";
     if (n.type === "range") return "Cooking range";
+    if (n.type === "furnace") return "Furnace";
+    if (n.type === "anvil") return "Anvil";
     return n.type;
+  }
+
+  function nodeActionName(n) {
+    if (n.action) return n.action;
+    if (n.type === "tree") return "Chop";
+    if (n.type === "ore") return "Mine";
+    if (n.type === "fish") return "Fish";
+    if (n.type === "yarn") return "Gather";
+    if (n.type === "range") return "Cook";
+    if (n.type === "furnace") return "Smelt";
+    if (n.type === "anvil") return "Smith";
+    return "Use";
   }
 
   function hash(x, y) {
@@ -755,104 +990,135 @@
     if (!state.world || !state.me) return;
     const W = state.world.W, H = state.world.H;
     const tiles = state.world.tiles;
+    const T = tilePx();
     const viewW = canvas.clientWidth || 800;
     const viewH = canvas.clientHeight || 600;
-    const px = state.me.x * TILE + TILE / 2;
-    const py = state.me.y * TILE + TILE / 2;
-    state.camX = Math.max(0, Math.min(W * TILE - viewW, px - viewW / 2));
-    state.camY = Math.max(0, Math.min(H * TILE - viewH, py - viewH / 2));
+    const px = state.me.x * T + T / 2;
+    const py = state.me.y * T + T / 2;
+    state.camX = Math.max(0, Math.min(Math.max(0, W * T - viewW), px - viewW / 2));
+    state.camY = Math.max(0, Math.min(Math.max(0, H * T - viewH), py - viewH / 2));
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, viewW + 2, viewH + 2);
     ctx.save();
     ctx.translate(-state.camX, -state.camY);
 
-    const x0 = Math.max(0, Math.floor(state.camX / TILE) - 1);
-    const y0 = Math.max(0, Math.floor(state.camY / TILE) - 1);
-    const x1 = Math.min(W - 1, Math.ceil((state.camX + viewW) / TILE) + 1);
-    const y1 = Math.min(H - 1, Math.ceil((state.camY + viewH) / TILE) + 1);
+    const x0 = Math.max(0, Math.floor(state.camX / T) - 1);
+    const y0 = Math.max(0, Math.floor(state.camY / T) - 1);
+    const x1 = Math.min(W - 1, Math.ceil((state.camX + viewW) / T) + 1);
+    const y1 = Math.min(H - 1, Math.ceil((state.camY + viewH) / T) + 1);
 
     const t = now / 1000;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const kind = tiles[y][x];
-        const sx = x * TILE, sy = y * TILE;
-        drawTile(ctx, kind, sx, sy, hash(x, y), t, x, y);
+        const sx = x * T, sy = y * T;
+        drawTile(ctx, kind, sx, sy, hash(x, y), t, x, y, T);
       }
     }
 
     // resource markers
     for (const n of state.nodes) {
-      const sx = n.x * TILE, sy = n.y * TILE;
-      if (n.type === "yarn") drawBush(ctx, sx, sy, n.depleted);
-      if (n.type === "fish") drawRipple(ctx, sx, sy, t, n.depleted);
-      if (n.type === "ore") drawOreMark(ctx, sx, sy, n.depleted);
-      if (n.type === "range") drawRange(ctx, sx, sy, t);
+      const sx = n.x * T, sy = n.y * T;
+      if (n.type === "yarn") drawBush(ctx, sx, sy, n.depleted, T);
+      if (n.type === "fish") drawRipple(ctx, sx, sy, t, n.depleted, T);
+      if (n.type === "ore") drawOreMark(ctx, sx, sy, n.depleted, T);
+      if (n.type === "tree") drawChopMark(ctx, sx, sy, n.depleted, T);
+      if (n.type === "range") drawRange(ctx, sx, sy, t, T);
+      if (n.type === "furnace") drawFurnace(ctx, sx, sy, t, T);
+      if (n.type === "anvil") drawAnvil(ctx, sx, sy, T);
     }
 
-    for (const npc of state.npcs) drawActor(ctx, npc.x, npc.y, npc.avatar, npc.name, { npc: true }, now);
+    const tags = [];
+    for (const npc of state.npcs) drawActor(ctx, npc.x, npc.y, npc.avatar, npc.name, { npc: true }, now, T, tags);
     for (const mob of state.mobs) {
       if (!mob.alive) continue;
-      drawDog(ctx, mob.x, mob.y, mob, now);
+      drawDog(ctx, mob.x, mob.y, mob, now, T, tags);
     }
     const others = state.players.filter((p) => !state.me || p.id !== state.me.id);
-    for (const p of others) drawActor(ctx, p.x, p.y, p.avatar, p.name, { holder: p.holder, action: p.action }, now);
-    if (state.me) drawActor(ctx, state.me.x, state.me.y, state.me.avatar, state.me.name, { self: true, holder: state.me.holder, action: state.me.action }, now);
+    for (const p of others) drawActor(ctx, p.x, p.y, p.avatar, p.name, { holder: p.holder, action: p.action, combatLevel: p.combatLevel }, now, T, tags);
+    if (state.me) drawActor(ctx, state.me.x, state.me.y, state.me.avatar, state.me.name, { self: true, holder: state.me.holder, action: state.me.action, combatLevel: state.me.combatLevel }, now, T, tags);
+    drawNametags(ctx, tags, T);
 
     if (state.clickFx && now - state.clickFx.t < 500) {
       const a = 1 - (now - state.clickFx.t) / 500;
       ctx.strokeStyle = `rgba(255,230,120,${a})`;
       ctx.lineWidth = 2;
-      ctx.strokeRect(state.clickFx.x * TILE + 4, state.clickFx.y * TILE + 4, TILE - 8, TILE - 8);
+      ctx.strokeRect(state.clickFx.x * T + 4, state.clickFx.y * T + 4, T - 8, T - 8);
     }
     if (state.hover) {
       ctx.strokeStyle = "rgba(255,255,255,.25)";
-      ctx.strokeRect(state.hover.tx * TILE, state.hover.ty * TILE, TILE, TILE);
+      ctx.strokeRect(state.hover.tx * T, state.hover.ty * T, T, T);
     }
 
     ctx.restore();
     drawMinimap();
   }
 
-  function drawTile(c, kind, sx, sy, h, t, x, y) {
+  function drawTile(c, kind, sx, sy, h, t, x, y, T = TILE) {
     const v = (h % 18) - 9;
-    if (kind === "water") {
+    const mid = T / 2;
+    if (kind === "water" || kind === "deepwater") {
       const wave = Math.sin(t * 2 + x * 0.4 + y * 0.3) * 8;
-      c.fillStyle = `rgb(${54 + wave}, ${110 + wave}, ${140 + wave / 2})`;
-      c.fillRect(sx, sy, TILE, TILE);
+      const deep = kind === "deepwater";
+      c.fillStyle = deep
+        ? `rgb(${30 + wave / 2}, ${70 + wave}, ${110 + wave / 2})`
+        : `rgb(${54 + wave}, ${110 + wave}, ${140 + wave / 2})`;
+      c.fillRect(sx, sy, T, T);
       c.fillStyle = "rgba(200,230,255,.15)";
-      c.fillRect(sx, sy + (h % TILE), TILE, 2);
+      c.fillRect(sx, sy + (h % T), T, 2);
       return;
     }
-    if (kind === "stone") { c.fillStyle = `rgb(${70 + v},${68 + v},${72 + v})`; c.fillRect(sx, sy, TILE, TILE); stoneNoise(c, sx, sy, h); return; }
-    if (kind === "wall") { c.fillStyle = "#4a3a32"; c.fillRect(sx, sy, TILE, TILE); c.fillStyle = "#2f2620"; c.fillRect(sx, sy, TILE, 4); c.fillRect(sx, sy, 3, TILE); return; }
-    if (kind === "ore") { c.fillStyle = "#5a5550"; c.fillRect(sx, sy, TILE, TILE); c.fillStyle = "#c4843a"; c.beginPath(); c.arc(sx + 20, sy + 20, 10, 0, 6.3); c.fill(); return; }
-    if (kind === "floor") { c.fillStyle = "#7a5a38"; c.fillRect(sx, sy, TILE, TILE); c.strokeStyle = "rgba(40,20,8,.3)"; c.strokeRect(sx, sy, TILE, TILE / 2); return; }
-    if (kind === "rug") { c.fillStyle = "#7a5a38"; c.fillRect(sx, sy, TILE, TILE); c.fillStyle = "#a32018"; c.fillRect(sx + 4, sy + 4, TILE - 8, TILE - 8); c.strokeStyle = "#d4a017"; c.strokeRect(sx + 6, sy + 6, TILE - 12, TILE - 12); return; }
-    if (kind === "path") { c.fillStyle = `rgb(${168 + v},${140 + v},${90 + v})`; c.fillRect(sx, sy, TILE, TILE); return; }
-    if (kind === "dock" || kind === "sand") { c.fillStyle = `rgb(${194 + v},${170 + v},${110 + v})`; c.fillRect(sx, sy, TILE, TILE); return; }
-    if (kind === "tree") {
+    if (kind === "stone" || kind === "quarry") {
+      c.fillStyle = kind === "quarry" ? `rgb(${64 + v},${80 + v},${70 + v})` : `rgb(${70 + v},${68 + v},${72 + v})`;
+      c.fillRect(sx, sy, T, T); stoneNoise(c, sx, sy, h); return;
+    }
+    if (kind === "wall") { c.fillStyle = "#4a3a32"; c.fillRect(sx, sy, T, T); c.fillStyle = "#2f2620"; c.fillRect(sx, sy, T, 4); c.fillRect(sx, sy, 3, T); return; }
+    if (kind === "ore" || kind === "tinore" || kind === "ironore" || kind === "jadeore") {
+      c.fillStyle = "#5a5550"; c.fillRect(sx, sy, T, T);
+      c.fillStyle = kind === "jadeore" ? "#4caf70" : kind === "ironore" ? "#8a8a96" : kind === "tinore" ? "#c0c4c8" : "#c4843a";
+      c.beginPath(); c.arc(sx + mid, sy + mid, T * 0.25, 0, 6.3); c.fill(); return;
+    }
+    if (kind === "floor") { c.fillStyle = "#7a5a38"; c.fillRect(sx, sy, T, T); c.strokeStyle = "rgba(40,20,8,.3)"; c.strokeRect(sx, sy, T, T / 2); return; }
+    if (kind === "rug") { c.fillStyle = "#7a5a38"; c.fillRect(sx, sy, T, T); c.fillStyle = "#a32018"; c.fillRect(sx + 4, sy + 4, T - 8, T - 8); c.strokeStyle = "#d4a017"; c.strokeRect(sx + 6, sy + 6, T - 12, T - 12); return; }
+    if (kind === "path" || kind === "bridge" || kind === "plank") { c.fillStyle = `rgb(${168 + v},${140 + v},${90 + v})`; c.fillRect(sx, sy, T, T); return; }
+    if (kind === "dock" || kind === "sand") { c.fillStyle = `rgb(${194 + v},${170 + v},${110 + v})`; c.fillRect(sx, sy, T, T); return; }
+    if (kind === "shrine") { c.fillStyle = `rgb(${80 + v},${90 + v},${70 + v})`; c.fillRect(sx, sy, T, T); c.fillStyle = "rgba(243,207,106,.2)"; c.fillRect(sx, sy, T, T); return; }
+    if (kind === "lantern") {
+      c.fillStyle = `rgb(${194 + v},${170 + v},${110 + v})`; c.fillRect(sx, sy, T, T);
+      c.fillStyle = "#d44a3a"; c.fillRect(sx + T * 0.35, sy + T * 0.15, T * 0.3, T * 0.45);
+      c.fillStyle = "#f3cf6a"; c.beginPath(); c.arc(sx + mid, sy + T * 0.28, T * 0.12, 0, 6.3); c.fill();
+      return;
+    }
+    if (kind === "tree" || kind === "pine" || kind === "cherry" || kind === "bamboo") {
       c.fillStyle = `rgb(${58 + v},${110 + v},${48 + v})`;
-      c.fillRect(sx, sy, TILE, TILE);
-      c.fillStyle = "#3d6a2e";
-      c.beginPath(); c.arc(sx + 20, sy + 16, 16, 0, 6.3); c.fill();
+      c.fillRect(sx, sy, T, T);
+      if (kind === "bamboo") {
+        c.fillStyle = "#7cb342";
+        c.fillRect(sx + mid - 3, sy + 4, 6, T - 8);
+        c.fillStyle = "#558b2f";
+        c.fillRect(sx + mid - 8, sy + 8, 6, T * 0.4);
+        return;
+      }
+      c.fillStyle = kind === "cherry" ? "#d46a8a" : kind === "pine" ? "#2e5a28" : "#3d6a2e";
+      c.beginPath(); c.arc(sx + mid, sy + T * 0.4, T * 0.4, 0, 6.3); c.fill();
       c.fillStyle = "#6a4428";
-      c.fillRect(sx + 16, sy + 26, 8, 12);
+      c.fillRect(sx + mid - T * 0.1, sy + T * 0.65, T * 0.2, T * 0.3);
       return;
     }
     if (kind === "flower") {
       c.fillStyle = `rgb(${70 + v},${120 + v},${52 + v})`;
-      c.fillRect(sx, sy, TILE, TILE);
+      c.fillRect(sx, sy, T, T);
       c.fillStyle = (h % 2) ? "#d44a3a" : "#f2d66b";
-      c.beginPath(); c.arc(sx + 12, sy + 14, 3, 0, 6.3); c.fill();
-      c.beginPath(); c.arc(sx + 26, sy + 22, 3, 0, 6.3); c.fill();
+      c.beginPath(); c.arc(sx + T * 0.3, sy + T * 0.35, 3, 0, 6.3); c.fill();
+      c.beginPath(); c.arc(sx + T * 0.65, sy + T * 0.55, 3, 0, 6.3); c.fill();
       return;
     }
-    // grass
     c.fillStyle = `rgb(${62 + v},${118 + v},${50 + v})`;
-    c.fillRect(sx, sy, TILE, TILE);
+    c.fillRect(sx, sy, T, T);
     c.fillStyle = "rgba(255,255,255,.04)";
-    c.fillRect(sx, sy, TILE, 1);
+    c.fillRect(sx, sy, T, 1);
   }
 
   function stoneNoise(c, sx, sy, h) {
@@ -860,30 +1126,49 @@
     c.fillRect(sx + (h % 10), sy + (h % 13), 6, 3);
   }
 
-  function drawBush(c, sx, sy, depleted) {
+  function drawBush(c, sx, sy, depleted, T = TILE) {
     c.fillStyle = depleted ? "#6a6a4a" : "#c45a8a";
-    c.beginPath(); c.arc(sx + 20, sy + 22, depleted ? 7 : 11, 0, 6.3); c.fill();
+    c.beginPath(); c.arc(sx + T * 0.5, sy + T * 0.55, T * (depleted ? 0.18 : 0.28), 0, 6.3); c.fill();
     if (!depleted) {
       c.fillStyle = "#f2d6de";
-      c.beginPath(); c.arc(sx + 16, sy + 18, 3, 0, 6.3); c.fill();
+      c.beginPath(); c.arc(sx + T * 0.4, sy + T * 0.45, 3, 0, 6.3); c.fill();
     }
   }
-  function drawRipple(c, sx, sy, t, depleted) {
+  function drawRipple(c, sx, sy, t, depleted, T = TILE) {
     if (depleted) return;
     c.strokeStyle = "rgba(255,240,180,.7)";
     c.beginPath();
-    c.arc(sx + 20, sy + 20, 6 + (t * 3 % 6), 0, 6.3);
+    c.arc(sx + T * 0.5, sy + T * 0.5, T * 0.15 + (t * 3 % 6), 0, 6.3);
     c.stroke();
   }
-  function drawOreMark(c, sx, sy, depleted) {
+  function drawOreMark(c, sx, sy, depleted, T = TILE) {
     c.fillStyle = depleted ? "#888" : "#f0c050";
-    c.fillRect(sx + 16, sy + 8, 8, 6);
+    c.fillRect(sx + T * 0.4, sy + T * 0.2, T * 0.2, T * 0.15);
   }
-  function drawRange(c, sx, sy, t) {
+  function drawChopMark(c, sx, sy, depleted, T = TILE) {
+    if (depleted) return;
+    c.strokeStyle = "#fff3a0";
+    c.beginPath();
+    c.moveTo(sx + T * 0.25, sy + T * 0.7);
+    c.lineTo(sx + T * 0.75, sy + T * 0.4);
+    c.stroke();
+  }
+  function drawRange(c, sx, sy, t, T = TILE) {
     c.fillStyle = "#333";
-    c.fillRect(sx + 8, sy + 14, 24, 18);
+    c.fillRect(sx + T * 0.2, sy + T * 0.35, T * 0.6, T * 0.45);
     c.fillStyle = `rgb(240,${120 + Math.sin(t * 8) * 40},40)`;
-    c.fillRect(sx + 14, sy + 8, 12, 10);
+    c.fillRect(sx + T * 0.35, sy + T * 0.2, T * 0.3, T * 0.25);
+  }
+  function drawFurnace(c, sx, sy, t, T = TILE) {
+    c.fillStyle = "#3a3a40";
+    c.fillRect(sx + T * 0.15, sy + T * 0.25, T * 0.7, T * 0.6);
+    c.fillStyle = `rgb(255,${100 + Math.sin(t * 6) * 40},30)`;
+    c.fillRect(sx + T * 0.3, sy + T * 0.45, T * 0.4, T * 0.28);
+  }
+  function drawAnvil(c, sx, sy, T = TILE) {
+    c.fillStyle = "#6a6a70";
+    c.fillRect(sx + T * 0.15, sy + T * 0.35, T * 0.7, T * 0.18);
+    c.fillRect(sx + T * 0.35, sy + T * 0.5, T * 0.3, T * 0.3);
   }
 
   function avatarImg(id) {
@@ -902,11 +1187,11 @@
     return state.images[a ? a.file : (id + ".jpg")] || state.images["classic-paw.jpg"];
   }
 
-  function drawActor(c, x, y, avatar, name, flags, now) {
-    const sx = x * TILE + TILE / 2;
+  function drawActor(c, x, y, avatar, name, flags, now, T = TILE, tags) {
+    const sx = x * T + T / 2;
     const bob = flags.action ? Math.sin(now / 80) * 1.5 : Math.sin(now / 250 + x) * 0.6;
-    const sy = y * TILE + TILE / 2 + bob;
-    const r = 16;
+    const sy = y * T + T / 2 + bob;
+    const r = Math.max(10, T * 0.4);
     c.save();
     c.beginPath();
     c.arc(sx, sy, r, 0, Math.PI * 2);
@@ -928,18 +1213,47 @@
       c.strokeStyle = "#d4a017";
       c.beginPath(); c.arc(sx, sy, r + 3, 0, Math.PI * 2); c.stroke();
     }
-    c.font = "bold 11px sans-serif";
-    c.textAlign = "center";
-    c.lineWidth = 3;
-    c.strokeStyle = "rgba(0,0,0,.7)";
-    c.fillStyle = flags.holder ? "#ffe9a0" : flags.npc ? "#f3cf6a" : "#fff";
-    c.strokeText(name, sx, sy - r - 4);
-    c.fillText(name, sx, sy - r - 4);
+    if (tags) {
+      const label = name + (flags.combatLevel ? "  (lvl " + flags.combatLevel + ")" : "");
+      tags.push({ sx, sy: sy - r - 4, name: label, flags, self: !!flags.self, npc: !!flags.npc });
+    }
   }
 
-  function drawDog(c, x, y, mob, now) {
-    const sx = x * TILE + TILE / 2;
-    const sy = y * TILE + TILE / 2;
+  function drawNametags(c, tags, T) {
+    if (!tags || !tags.length || !state.me) return;
+    const maxDist = isMobileLayout() ? 7 : 10;
+    const visible = [];
+    for (const tag of tags) {
+      const dx = tag.sx / T - 0.5 - state.me.x;
+      const dy = tag.sy / T + 0.2 - state.me.y;
+      if (!tag.self && !tag.npc && Math.hypot(dx, dy) > maxDist) continue;
+      visible.push(tag);
+    }
+    visible.sort((a, b) => a.sy - b.sy || a.sx - b.sx);
+    const used = [];
+    const seen = [];
+    for (const tag of visible) {
+      if (seen.some((u) => u.name === tag.name && Math.abs(u.sx - tag.sx) < 10 && Math.abs(u.sy - tag.sy) < 10)) continue;
+      seen.push(tag);
+      let y = tag.sy;
+      let guard = 0;
+      while (guard++ < 8 && used.some((u) => Math.abs(u.sx - tag.sx) < 80 && Math.abs(u.sy - y) < 13)) {
+        y -= 13;
+      }
+      used.push({ sx: tag.sx, sy: y });
+      c.font = "bold 11px sans-serif";
+      c.textAlign = "center";
+      c.lineWidth = 3;
+      c.strokeStyle = "rgba(0,0,0,.7)";
+      c.fillStyle = tag.flags.holder ? "#ffe9a0" : tag.flags.npc ? "#f3cf6a" : "#fff";
+      c.strokeText(tag.name, tag.sx, y);
+      c.fillText(tag.name, tag.sx, y);
+    }
+  }
+
+  function drawDog(c, x, y, mob, now, T = TILE, tags) {
+    const sx = x * T + T / 2;
+    const sy = y * T + T / 2;
     c.save();
     c.translate(sx, sy);
     c.fillStyle = "#c8b090";
@@ -957,10 +1271,7 @@
     c.strokeStyle = "#111";
     c.strokeRect(-11, -18, 22, 3);
     c.restore();
-    c.font = "10px sans-serif";
-    c.textAlign = "center";
-    c.fillStyle = "#fff";
-    c.fillText("Rival Dog", sx, sy - 22);
+    if (tags) tags.push({ sx, sy: sy - 22, name: (mob.name || "Rival Dog") + (mob.level ? "  (lvl " + mob.level + ")" : ""), flags: {}, self: false, npc: false });
   }
 
   function drawMinimap() {
@@ -975,14 +1286,30 @@
       for (let x = 0; x < W; x++) {
         const k = tiles[y][x];
         mctx.fillStyle =
-          k === "water" ? "#3a6e90" :
-          k === "wall" || k === "ore" || k === "stone" ? "#555" :
-          k === "tree" ? "#2e5a28" :
-          k === "path" || k === "dock" || k === "sand" ? "#c2a46a" :
+          k === "water" || k === "deepwater" ? "#3a6e90" :
+          k === "wall" || k === "ore" || k === "tinore" || k === "ironore" || k === "jadeore" || k === "stone" || k === "quarry" ? "#555" :
+          k === "tree" || k === "pine" || k === "bamboo" || k === "cherry" ? "#2e5a28" :
+          k === "path" || k === "dock" || k === "sand" || k === "bridge" || k === "plank" || k === "shrine" ? "#c2a46a" :
           k === "floor" || k === "rug" ? "#8a5a30" :
           "#4a8a40";
         mctx.fillRect(x * sx, y * sy, sx + 0.5, sy + 0.5);
       }
+    }
+    mctx.fillStyle = "rgba(255,246,216,.85)";
+    mctx.font = "8px sans-serif";
+    mctx.textAlign = "center";
+    const labels = [
+      { name: "Village", x: 32, y: 28 },
+      { name: "Pond", x: 8, y: 29 },
+      { name: "Mine", x: 33, y: 8 },
+      { name: "Forest", x: 55, y: 30 },
+      { name: "Harbor", x: 14, y: 70 },
+      { name: "Bamboo", x: 48, y: 72 },
+      { name: "Quarry", x: 95, y: 14 },
+      { name: "Shrine", x: 108, y: 50 },
+    ];
+    for (const z of labels) {
+      mctx.fillText(z.name, z.x * sx, z.y * sy);
     }
     for (const p of state.players) {
       mctx.fillStyle = state.me && p.id === state.me.id ? "#fff36a" : "#fff";
@@ -1337,6 +1664,28 @@
 
   $("connect-wallet").addEventListener("click", connectWallet);
 
+  if ($("zoom-in")) $("zoom-in").addEventListener("click", () => setZoom((state.zoom || 1) + 0.15));
+  if ($("zoom-out")) $("zoom-out").addEventListener("click", () => setZoom((state.zoom || 1) - 0.15));
+  if ($("panel-toggle")) {
+    $("panel-toggle").addEventListener("click", () => {
+      document.body.classList.toggle("panel-collapsed");
+      $("panel-toggle").textContent = document.body.classList.contains("panel-collapsed") ? "Skills & items" : "Hide panel";
+      resize();
+    });
+  }
+  if ($("chat-toggle")) {
+    $("chat-toggle").addEventListener("click", () => {
+      const collapsed = document.body.classList.toggle("chat-collapsed");
+      if (!collapsed) {
+        state.chatUnread = 0;
+        updateChatUnread();
+        const log = $("chat-log");
+        if (log) log.scrollTop = log.scrollHeight;
+      }
+    });
+  }
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
+
   async function connectWallet() {
     const status = $("wallet-status");
     if (state.me && state.me.wallet) {
@@ -1377,7 +1726,14 @@
     if (e.key === "Escape") send({ type: "stop" });
   });
 
+  window.__nhl = {
+    send,
+    getState: () => state,
+    setZoom,
+  };
+
   bootLogin().then(() => {
     requestAnimationFrame(loop);
+    applyMobileChrome();
   });
 })();

@@ -21,7 +21,9 @@ const PERIODS = [
 const BOARDS = [
   { id: "fishing", name: "Fishing", kind: "skill", skill: "fishing", unit: "level" },
   { id: "yarn", name: "Yarn-gathering", kind: "skill", skill: "yarn", unit: "level" },
+  { id: "woodcutting", name: "Woodcutting", kind: "skill", skill: "woodcutting", unit: "level" },
   { id: "mining", name: "Mining", kind: "skill", skill: "mining", unit: "level" },
+  { id: "smithing", name: "Smithing", kind: "skill", skill: "smithing", unit: "level" },
   { id: "cooking", name: "Cooking", kind: "skill", skill: "cooking", unit: "level" },
   { id: "combat", name: "Combat", kind: "skill", skill: "combat", unit: "level" },
   { id: "total", name: "Total level", kind: "total", unit: "level" },
@@ -72,7 +74,7 @@ function monthId(date = new Date()) {
 }
 
 function emptyPeriodStats() {
-  return { fishing: 0, yarn: 0, mining: 0, cooking: 0, combat: 0, xp: 0, gold: 0, fish: 0, kills: 0 };
+  return { fishing: 0, yarn: 0, woodcutting: 0, mining: 0, smithing: 0, cooking: 0, combat: 0, xp: 0, gold: 0, fish: 0, kills: 0 };
 }
 
 function cloneStats(src) {

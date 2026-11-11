@@ -13,9 +13,11 @@ const persist = require("./persist");
 
 const world = require("./world");
 const {
-  AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP,
+  AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP, QUESTS,
+  SMELT_RECIPES, SMITH_RECIPES,
   MIHAO_MINT, MIHAO_TOKEN_PROGRAM, DEXSCREENER,
-  levelFromXp, emptySkills, rollFishKg, isWalkable, pathfind, zoneAt, adj, buildWorld,
+  levelFromXp, emptySkills, normalizeQuests, rollFishKg, isWalkable, pathfind, zoneAt, zoneBlocked, adj, buildWorld,
+  combatLevel, equipmentBonuses,
 } = world;
 const leaderboard = require("./leaderboard");
 
@@ -41,6 +43,7 @@ const CHAT_WINDOW_MS = 15000;
 const CHAT_WINDOW_MAX = 6;
 const INV_SIZE = 28;
 const PLAYER_HP = 20;
+const VIEW_RADIUS = 40;
 
 const PROFANITY = [
   "fuck", "shit", "bitch", "asshole", "cunt", "nigger", "nigga", "faggot",
@@ -316,6 +319,11 @@ function hydrateAccount(a) {
   a.kills = Math.max(0, a.kills | 0);
   a.periods = leaderboard.normalizePeriods(a.periods);
   a.lastRenamedAt = Math.max(0, Number(a.lastRenamedAt) || 0);
+  a.quests = normalizeQuests(a.quests);
+  if (a.equipped && a.equipped.hat && !a.equipped.head) {
+    a.equipped.head = a.equipped.hat;
+    delete a.equipped.hat;
+  }
   return a;
 }
 
@@ -327,7 +335,7 @@ function createAccount({ name, avatar, wallet }) {
     avatar: resolveAvatar(avatar),
     x: staticWorld.spawn.x,
     y: staticWorld.spawn.y,
-    gold: 15,
+    gold: 40,
     hp: PLAYER_HP,
     skills: emptySkills(),
     inventory: [{ id: "cooked_fish", qty: 2 }],
@@ -337,6 +345,7 @@ function createAccount({ name, avatar, wallet }) {
     kills: 0,
     periods: leaderboard.normalizePeriods(null),
     lastRenamedAt: 0,
+    quests: normalizeQuests(null),
     created: Date.now(),
   }));
 }
@@ -371,6 +380,7 @@ function snapshot(s) {
     kills: a.kills || 0,
     periods: a.periods || leaderboard.normalizePeriods(null),
     lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0),
+    quests: a.quests || normalizeQuests(null),
     created: a.created,
   };
 }
@@ -550,6 +560,7 @@ function publicPlayer(s) {
     premiumName: !!s.account.equipped?.gold_nametag,
     wallet: s.account.wallet || null,
     walletLabel: shortWallet(s.account.wallet),
+    combatLevel: combatLevel(s.account),
   };
 }
 
@@ -569,6 +580,9 @@ function mePayload(s) {
     equipped: s.account.equipped,
     needsName: needsNamePick(s.account),
     nextRenameAt: nextRenameAt(s.account) || null,
+    quests: s.account.quests || normalizeQuests(null),
+    combatLevel: combatLevel(s.account),
+    bonuses: equipmentBonuses(s.account),
   };
 }
 
@@ -576,12 +590,17 @@ function compactNodes() {
   return nodes.map((n) => ({
     id: n.id, type: n.type, x: n.x, y: n.y,
     depleted: !!n.depleted, skill: n.skill,
+    level: n.level || 1, label: n.label || n.type,
+    resource: n.resource || null, action: n.action || null,
+    charges: n.depleted ? 0 : (n.charges || 0),
   }));
 }
 
 function compactMobs() {
   return mobs.map((m) => ({
-    id: m.id, name: m.name, x: Math.round(m.fx * 100) / 100, y: Math.round(m.fy * 100) / 100,
+    id: m.id, name: m.name, kind: m.kind || "dog",
+    level: m.level || 1,
+    x: Math.round(m.fx * 100) / 100, y: Math.round(m.fy * 100) / 100,
     hp: m.hp, maxHp: m.maxHp, alive: m.alive,
   }));
 }
@@ -597,10 +616,27 @@ function broadcast(msg, except) {
   }
 }
 
+function nearbyOf(s, list, radius = VIEW_RADIUS) {
+  return list.filter((o) => Math.hypot((o.x - s.x), (o.y - s.y)) <= radius);
+}
+
 function broadcastState() {
-  const players = [...sessions.values()].map(publicPlayer);
-  const msg = { type: "state", players, nodes: compactNodes(), mobs: compactMobs(), t: Date.now() };
-  broadcast(msg);
+  const allNodes = compactNodes();
+  const allMobs = compactMobs();
+  const everyone = [...sessions.values()];
+  for (const s of everyone) {
+    if (!s.ws || s.ws.readyState !== 1) continue;
+    const players = everyone
+      .filter((o) => o.id === s.id || Math.hypot(o.x - s.x, o.y - s.y) <= VIEW_RADIUS)
+      .map(publicPlayer);
+    send(s.ws, {
+      type: "state",
+      players,
+      nodes: nearbyOf(s, allNodes),
+      mobs: nearbyOf(s, allMobs),
+      t: Date.now(),
+    });
+  }
 }
 
 function systemChat(text) {
@@ -623,8 +659,10 @@ function giveXp(s, skill, amount) {
   const after = levelFromXp(s.account.skills[skill]);
   if (after.level > before.level) {
     const sk = SKILLS.find((k) => k.id === skill);
-    toast(s, `${sk ? sk.name : skill} level ${after.level}!`);
-    systemChat(`${s.account.name} reached ${sk ? sk.name : skill} level ${after.level}.`);
+    const label = sk ? sk.name : skill;
+    toast(s, `${label} level ${after.level}!`);
+    systemChat(`${s.account.name} reached ${label} level ${after.level}.`);
+    send(s.ws, { type: "levelup", skill, name: label, level: after.level });
   }
 }
 
@@ -638,21 +676,164 @@ function cancelAction(s) {
   s.targetMob = null;
 }
 
-function interact(s, targetId) {
+function skillLevelOf(account, skill) {
+  return levelFromXp((account.skills && account.skills[skill]) || 0).level;
+}
+
+function invHasRoom(inv, itemId) {
+  if (inv.length < INV_SIZE) return true;
+  const def = ITEMS[itemId];
+  return !!(def && def.stack && invCount(inv, itemId) > 0);
+}
+
+function bestTool(account, kind) {
+  if (!kind) return null;
+  let best = null;
+  const skill = kind === "pickaxe" ? "mining" : kind === "axe" ? "woodcutting" : kind === "rod" ? "fishing" : null;
+  const lvl = skill ? skillLevelOf(account, skill) : 99;
+  const consider = (id) => {
+    const def = ITEMS[id];
+    if (!def || def.tool !== kind) return;
+    if ((def.toolLevel || 1) > lvl) return;
+    if (!best || (def.toolTier || 0) > (best.toolTier || 0)) best = def;
+  };
+  for (const it of account.inventory || []) consider(it.id);
+  for (const id of Object.values(account.equipped || {})) consider(id);
+  return best;
+}
+
+function toolKindFor(node) {
+  if (!node) return null;
+  if (node.skill === "mining" || node.type === "ore") return "pickaxe";
+  if (node.skill === "woodcutting" || node.type === "tree") return "axe";
+  if (node.skill === "fishing" || node.type === "fish") return "rod";
+  return null;
+}
+
+function gatherDuration(s, node) {
+  let time = node.time || 2400;
+  const kind = toolKindFor(node);
+  const tool = kind ? bestTool(s.account, kind) : null;
+  if (tool && tool.toolSpeed) time = Math.round(time * tool.toolSpeed);
+  else if ((node.toolTier || 0) <= 1 && kind) time = Math.round(time * 1.25);
+  return Math.max(600, time);
+}
+
+function canStartGather(s, node) {
+  if (!node || node.type === "range" || node.type === "furnace" || node.type === "anvil") return "Nothing happens.";
+  if (node.depleted || (node.charges || 0) <= 0) return "Nothing there right now.";
+  const need = node.level || 1;
+  if (need > 1 && skillLevelOf(s.account, node.skill) < need) {
+    const sk = SKILLS.find((k) => k.id === node.skill);
+    return `You need ${sk ? sk.name : node.skill} level ${need}.`;
+  }
+  const kind = toolKindFor(node);
+  if (kind && (node.toolTier || 0) >= 2) {
+    const tool = bestTool(s.account, kind);
+    if (!tool || (tool.toolTier || 0) < node.toolTier) {
+      return `You need a better ${kind} for this.`;
+    }
+  }
+  if (!invHasRoom(s.account.inventory, node.item)) return "Your inventory is full.";
+  return null;
+}
+
+function recipeInputsOk(account, recipe) {
+  if (!recipe || !recipe.inputs) return false;
+  if (skillLevelOf(account, "smithing") < (recipe.level || 1)) return false;
+  for (const [id, qty] of Object.entries(recipe.inputs)) {
+    if (invCount(account.inventory, id) < qty) return false;
+  }
+  return true;
+}
+
+function availableRecipes(account, list) {
+  return list.filter((r) => recipeInputsOk(account, r));
+}
+
+function pickRecipe(account, list, recipeId, product) {
+  const pool = availableRecipes(account, list);
+  if (recipeId) return pool.find((r) => r.id === recipeId || r.product === recipeId) || null;
+  if (product) return pool.find((r) => r.product === product) || null;
+  // Prefer the highest-level recipe the player can currently make.
+  return pool.slice().sort((a, b) => (b.level || 0) - (a.level || 0))[0] || null;
+}
+
+function consumeInputs(account, recipe) {
+  for (const [id, qty] of Object.entries(recipe.inputs)) {
+    if (!invRemove(account.inventory, id, qty)) return false;
+  }
+  return true;
+}
+
+function restoreInputs(account, recipe) {
+  for (const [id, qty] of Object.entries(recipe.inputs)) invAdd(account.inventory, id, qty);
+}
+
+function talkQuest(s, npc) {
+  const quest = QUESTS.find((q) => q.giver === npc.id);
+  if (!quest) return false;
+  s.account.quests = normalizeQuests(s.account.quests);
+  const st = s.account.quests[quest.id] || { step: 0, done: false };
+  if (st.done) {
+    toast(s, "Thank you again, friend.");
+    return true;
+  }
+  if (st.step <= 0) {
+    st.step = 1;
+    s.account.quests[quest.id] = st;
+    persist.markDirty();
+    toast(s, quest.start);
+    send(s.ws, { type: "me", me: mePayload(s) });
+    send(s.ws, { type: "open", panel: "quests" });
+    return true;
+  }
+  const need = quest.need || {};
+  const missing = Object.entries(need).filter(([id, qty]) => invCount(s.account.inventory, id) < qty);
+  if (missing.length) {
+    toast(s, quest.waiting);
+    return true;
+  }
+  for (const [id, qty] of Object.entries(need)) invRemove(s.account.inventory, id, qty);
+  const reward = quest.reward || {};
+  if (reward.gold) {
+    s.account.gold += reward.gold;
+    leaderboard.addPeriodGold(s.account, reward.gold);
+  }
+  if (reward.item) invAdd(s.account.inventory, reward.item, 1);
+  if (reward.xp) {
+    for (const [sk, amt] of Object.entries(reward.xp)) giveXp(s, sk, amt);
+  }
+  st.step = 2;
+  st.done = true;
+  s.account.quests[quest.id] = st;
+  persist.markDirty();
+  toast(s, quest.finish);
+  send(s.ws, { type: "me", me: mePayload(s) });
+  send(s.ws, { type: "open", panel: "quests" });
+  return true;
+}
+
+function interact(s, targetId, extra) {
+  extra = extra || {};
   const npc = staticWorld.npcs.find((n) => n.id === targetId);
   if (npc) {
     walkThen(s, npc.x, npc.y, () => {
       if (npc.role === "bank") send(s.ws, { type: "open", panel: "bank" });
       else if (npc.role === "shop") send(s.ws, { type: "open", panel: "shop" });
       else if (npc.role === "cook") toast(s, "Click the cooking range to cook raw fish.");
-      else toast(s, "你好，朋友. Grind, bank, and be kind.");
+      else if (npc.role === "smith") toast(s, "Use the furnace to smelt ore, then the anvil to smith bars into tools.");
+      const quested = talkQuest(s, npc);
+      if (!quested && npc.role !== "bank" && npc.role !== "shop" && npc.role !== "cook" && npc.role !== "smith") {
+        toast(s, "你好，朋友. Grind, bank, and be kind.");
+      }
       send(s.ws, { type: "examine", text: npc.examine });
     });
     return;
   }
   const node = nodes.find((n) => n.id === targetId);
   if (node) {
-    walkThen(s, node.x, node.y, () => beginNode(s, node));
+    walkThen(s, node.x, node.y, () => beginNode(s, node, extra));
     return;
   }
   const mob = mobs.find((m) => m.id === targetId && m.alive);
@@ -665,6 +846,14 @@ function interact(s, targetId) {
   }
 }
 
+function pathBlockedFor(s, path) {
+  for (const step of path) {
+    const err = zoneBlocked(zoneAt(step.x, step.y), s.account);
+    if (err) return err;
+  }
+  return null;
+}
+
 function walkThen(s, tx, ty, cb) {
   const px = Math.round(s.x), py = Math.round(s.y);
   if (adj(px, py, tx, ty) || (px === tx && py === ty)) {
@@ -672,7 +861,6 @@ function walkThen(s, tx, ty, cb) {
     cb && cb();
     return;
   }
-  // path to a walkable adjacent tile
   let dest = null;
   if (isWalkable(tiles, tx, ty) && (px !== tx || py !== ty)) dest = { x: tx, y: ty };
   if (!dest) {
@@ -682,83 +870,172 @@ function walkThen(s, tx, ty, cb) {
     }
   }
   if (!dest) { toast(s, "Can't reach that."); return; }
+  const gate = zoneBlocked(zoneAt(dest.x, dest.y), s.account);
+  if (gate) { toast(s, gate); return; }
   const path = pathfind(tiles, s.x, s.y, dest.x, dest.y);
   if (!path.length) { toast(s, "No path."); return; }
+  const blocked = pathBlockedFor(s, path);
+  if (blocked) { toast(s, blocked); return; }
   s.path = path;
   s.pending = cb || null;
   s.action = null;
 }
 
-function beginNode(s, node) {
+function rawFishOptions(account) {
+  const out = [];
+  for (const def of Object.values(ITEMS)) {
+    if (!def || !def.cook) continue;
+    const have = invCount(account.inventory, def.id);
+    if (have <= 0) continue;
+    out.push({ raw: def, cooked: ITEMS[def.cook], have, level: def.cookLevel || 1, xp: def.cookXp || 20, time: def.cookTime || 1800 });
+  }
+  return out.sort((a, b) => b.level - a.level);
+}
+
+function beginNode(s, node, extra) {
+  extra = extra || {};
   if (node.type === "range") {
-    if (invCount(s.account.inventory, "raw_fish") < 1) {
-      toast(s, "You need raw fish to cook.");
+    const opts = rawFishOptions(s.account).filter((o) => skillLevelOf(s.account, "cooking") >= o.level);
+    if (!opts.length) {
+      const any = rawFishOptions(s.account);
+      if (!any.length) toast(s, "You need raw fish to cook.");
+      else toast(s, `You need Cooking level ${any[0].level} to cook ${any[0].raw.name}.`);
       return;
     }
-    startAction(s, "cook", node.id, node.time || 1800);
-    toast(s, "You start cooking...");
+    const pick = extra.recipe ? opts.find((o) => o.raw.id === extra.recipe || o.cooked.id === extra.recipe) : opts[0];
+    const use = pick || opts[0];
+    startAction(s, "cook", node.id, use.time);
+    s.action.recipe = use.raw.id;
+    toast(s, `You start cooking ${use.raw.name}...`);
     return;
   }
-  if (node.depleted) { toast(s, "Nothing there right now."); return; }
-  if (s.account.inventory.length >= INV_SIZE && !(ITEMS[node.item] && ITEMS[node.item].stack && invCount(s.account.inventory, node.item) > 0)) {
-    toast(s, "Your inventory is full.");
+  if (node.type === "furnace" || node.type === "anvil") {
+    const list = node.type === "furnace" ? SMELT_RECIPES : SMITH_RECIPES;
+    const recipe = pickRecipe(s.account, list, extra.recipe, extra.product);
+    if (!recipe) {
+      toast(s, node.type === "furnace" ? "You don't have ore to smelt, or the level for it." : "You don't have bars to smith, or the level for it.");
+      return;
+    }
+    if (!invHasRoom(s.account.inventory, recipe.product) && !ITEMS[recipe.product]?.stack) {
+      toast(s, "Your inventory is full.");
+      return;
+    }
+    const kind = node.type === "furnace" ? "smelt" : "smith";
+    startAction(s, kind, node.id, recipe.time || 2000);
+    s.action.recipe = recipe.id || recipe.product;
+    toast(s, "You start " + (recipe.label || kind) + "...");
     return;
   }
-  startAction(s, "gather", node.id, node.time || 2400);
+  const err = canStartGather(s, node);
+  if (err) { toast(s, err); return; }
+  startAction(s, "gather", node.id, gatherDuration(s, node));
   const sk = SKILLS.find((k) => k.id === node.skill);
   toast(s, `You start ${sk ? sk.verb : "working"}...`);
 }
 
 function finishGather(s, node) {
-  if (!node || node.depleted) return;
-  if (node.type === "range") return;
+  if (!node || node.type === "range" || node.type === "furnace" || node.type === "anvil") return;
+  const err = canStartGather(s, node);
+  if (err) { toast(s, err); cancelAction(s); return; }
   if (!invAdd(s.account.inventory, node.item, 1)) {
     toast(s, "Your inventory is full.");
     cancelAction(s);
     return;
   }
   giveXp(s, node.skill, node.xp || 20);
-  node.depleted = true;
-  node.respawnAt = Date.now() + (node.respawn || 15000);
+  node.charges = Math.max(0, (node.charges || 1) - 1);
   const item = ITEMS[node.item];
   let note = `You get ${item ? item.name : node.item}.`;
-  if (node.item === "raw_fish" || node.type === "fish") {
-    const kg = rollFishKg();
+  if ((node.item && String(node.item).startsWith("raw_")) || node.type === "fish") {
+    const kg = rollFishKg(node.resource);
     leaderboard.addPeriodFish(s.account, kg);
     const prev = Number(s.account.biggestFish) || 0;
     if (kg > prev) {
       s.account.biggestFish = kg;
-      note = `You catch a ${kg.toFixed(1)} kg fish — new personal best!`;
+      note = `You catch a ${kg.toFixed(1)} kg ${item ? item.name.replace(/^Raw /, "") : "fish"} — new personal best!`;
     } else {
-      note = `You catch a ${kg.toFixed(1)} kg fish.`;
+      note = `You catch a ${kg.toFixed(1)} kg ${item ? item.name.replace(/^Raw /, "") : "fish"}.`;
     }
   }
   toast(s, note);
   send(s.ws, { type: "me", me: mePayload(s) });
-  // auto-repeat if still there and node will respawn later — stop this cycle
+  if (node.charges > 0) {
+    const nextErr = canStartGather(s, node);
+    if (nextErr) { toast(s, nextErr); cancelAction(s); return; }
+    s.action.next = Date.now() + gatherDuration(s, node);
+    return;
+  }
+  node.depleted = true;
+  node.respawnAt = Date.now() + (node.respawn || 15000);
   cancelAction(s);
 }
 
 function finishCook(s) {
-  if (!invRemove(s.account.inventory, "raw_fish", 1)) {
+  const rawId = (s.action && s.action.recipe) || "raw_fish";
+  const raw = ITEMS[rawId];
+  if (!raw || !raw.cook) {
+    toast(s, "You have nothing to cook.");
+    cancelAction(s);
+    return;
+  }
+  if (skillLevelOf(s.account, "cooking") < (raw.cookLevel || 1)) {
+    toast(s, `You need Cooking level ${raw.cookLevel} for that.`);
+    cancelAction(s);
+    return;
+  }
+  if (!invRemove(s.account.inventory, rawId, 1)) {
     toast(s, "You have no more raw fish.");
     cancelAction(s);
     return;
   }
-  if (!invAdd(s.account.inventory, "cooked_fish", 1)) {
-    invAdd(s.account.inventory, "raw_fish", 1);
+  if (!invAdd(s.account.inventory, raw.cook, 1)) {
+    invAdd(s.account.inventory, rawId, 1);
     toast(s, "Your inventory is full.");
     cancelAction(s);
     return;
   }
-  giveXp(s, "cooking", 24);
-  toast(s, "You cook a fish.");
+  giveXp(s, "cooking", raw.cookXp || 24);
+  toast(s, `You cook ${ITEMS[raw.cook] ? ITEMS[raw.cook].name : raw.cook}.`);
   send(s.ws, { type: "me", me: mePayload(s) });
-  if (invCount(s.account.inventory, "raw_fish") > 0) {
-    s.action.next = Date.now() + 1800;
+  const next = rawFishOptions(s.account).find((o) => skillLevelOf(s.account, "cooking") >= o.level);
+  if (next && s.action) {
+    s.action.recipe = next.raw.id;
+    s.action.next = Date.now() + next.time;
   } else {
     cancelAction(s);
     toast(s, "You finish cooking.");
+  }
+}
+
+function finishCraft(s, list, verb) {
+  const recipe = pickRecipe(s.account, list, s.action && s.action.recipe);
+  if (!recipe) {
+    toast(s, `You have nothing left to ${verb}.`);
+    cancelAction(s);
+    return;
+  }
+  if (!consumeInputs(s.account, recipe)) {
+    toast(s, "You're missing materials.");
+    cancelAction(s);
+    return;
+  }
+  if (!invAdd(s.account.inventory, recipe.product, 1)) {
+    restoreInputs(s.account, recipe);
+    toast(s, "Your inventory is full.");
+    cancelAction(s);
+    return;
+  }
+  giveXp(s, "smithing", recipe.xp || 20);
+  const def = ITEMS[recipe.product];
+  toast(s, `You ${verb} a ${def ? def.name : recipe.product}.`);
+  send(s.ws, { type: "me", me: mePayload(s) });
+  const next = pickRecipe(s.account, list, recipe.id || recipe.product);
+  if (next && s.action) {
+    s.action.recipe = next.id || next.product;
+    s.action.next = Date.now() + (next.time || 2000);
+  } else {
+    cancelAction(s);
+    toast(s, `You finish ${verb === "smelt" ? "smelting" : "smithing"}.`);
   }
 }
 
@@ -774,30 +1051,37 @@ function combatTick(s, now) {
   }
   if (now < (s.action.next || 0)) return;
   s.action.next = now + 1200;
-  const dmg = 2 + Math.floor(Math.random() * 3) + Math.floor(levelFromXp(s.account.skills.combat || 0).level / 8);
+  const bonus = equipmentBonuses(s.account);
+  const dmg = Math.max(1, 2 + Math.floor(Math.random() * 3) + Math.floor(skillLevelOf(s.account, "combat") / 8) + (bonus.atk || 0) - Math.floor((mob.level || 1) / 6));
   mob.hp -= dmg;
   mob.target = s.id;
   toast(s, `You hit the ${mob.name} for ${dmg}.`);
   if (mob.hp <= 0) {
     mob.alive = false;
     mob.hp = 0;
-    mob.respawnAt = now + 20000;
-    giveXp(s, "combat", 30);
+    mob.respawnAt = now + 20000 + (mob.level || 1) * 800;
+    giveXp(s, "combat", mob.xp || 30);
     s.account.kills = (s.account.kills || 0) + 1;
     leaderboard.addPeriodKill(s.account);
-    const gold = 5 + Math.floor(Math.random() * 11);
+    const lo = Array.isArray(mob.gold) ? mob.gold[0] : 5;
+    const hi = Array.isArray(mob.gold) ? mob.gold[1] : 15;
+    const gold = lo + Math.floor(Math.random() * (hi - lo + 1));
     s.account.gold += gold;
     leaderboard.addPeriodGold(s.account, gold);
-    invAdd(s.account.inventory, "bones", 1);
-    toast(s, `The ${mob.name} is defeated. +${gold} gold, dog bones.`);
+    const drop = mob.drop || "bones";
+    invAdd(s.account.inventory, drop, 1);
+    const dropName = ITEMS[drop] ? ITEMS[drop].name : drop;
+    toast(s, `The ${mob.name} is defeated. +${gold} gold, ${dropName}.`);
     cancelAction(s);
     send(s.ws, { type: "me", me: mePayload(s) });
   }
 }
 
-function hitPlayer(s, dmg) {
+function hitPlayer(s, dmg, fromName) {
+  const bonus = equipmentBonuses(s.account);
+  dmg = Math.max(1, dmg - Math.floor((bonus.def || 0) / 2));
   s.hp -= dmg;
-  send(s.ws, { type: "toast", text: `A rival dog hits you for ${dmg}.` });
+  send(s.ws, { type: "toast", text: `${fromName || "A monster"} hits you for ${dmg}.` });
   if (s.hp <= 0) {
     s.hp = PLAYER_HP;
     s.x = staticWorld.spawn.x;
@@ -867,7 +1151,7 @@ function bankOp(s, op, itemId, qty = 1) {
 
 function equipItem(s, itemId) {
   const def = ITEMS[itemId];
-  if (!def || !def.cosmetic) { toast(s, "You can't wear that."); return; }
+  if (!def || !def.slot) { toast(s, "You can't wear that."); return; }
   if (!s.account.inventory.some((i) => i.id === itemId) && s.account.equipped[def.slot] !== itemId) {
     toast(s, "You don't have that.");
     return;
@@ -939,6 +1223,9 @@ function welcomePayload(s) {
     nodes: compactNodes(),
     mobs: compactMobs(),
     chatLog: chatLog.slice(-40),
+    quests: QUESTS.map((q) => ({ id: q.id, name: q.name, steps: q.steps, giver: q.giver })),
+    smeltRecipes: SMELT_RECIPES,
+    smithRecipes: SMITH_RECIPES,
   };
 }
 
@@ -1018,16 +1305,20 @@ function onMessage(ws, raw) {
     case "move": {
       const x = msg.x | 0, y = msg.y | 0;
       if (!isWalkable(tiles, x, y)) { toast(s, "You can't walk there."); return; }
+      const gate = zoneBlocked(zoneAt(x, y), s.account);
+      if (gate) { toast(s, gate); return; }
+      const planned = pathfind(tiles, s.x, s.y, x, y);
+      const blocked = planned.length ? pathBlockedFor(s, planned) : null;
+      if (blocked) { toast(s, blocked); return; }
       cancelAction(s);
       s.pending = null;
       s.targetMob = null;
-      const path = pathfind(tiles, s.x, s.y, x, y);
-      s.path = path;
-      if (!path.length && !(Math.round(s.x) === x && Math.round(s.y) === y)) toast(s, "No path.");
+      s.path = planned;
+      if (!planned.length && !(Math.round(s.x) === x && Math.round(s.y) === y)) toast(s, "No path.");
       break;
     }
     case "interact":
-      if (typeof msg.id === "string") interact(s, msg.id);
+      if (typeof msg.id === "string") interact(s, msg.id, msg);
       break;
     case "chat":
       handleChat(s, msg.text);
@@ -1102,6 +1393,7 @@ function tick(dt, now) {
       if (z.id !== s.lastZone) {
         s.lastZone = z.id;
         toast(s, `Entering ${z.name}`);
+        send(s.ws, { type: "zone", zone: z });
       }
     }
 
@@ -1112,6 +1404,12 @@ function tick(dt, now) {
         changed = true;
       } else if (s.action.kind === "cook" && now >= s.action.next) {
         finishCook(s);
+        changed = true;
+      } else if (s.action.kind === "smelt" && now >= s.action.next) {
+        finishCraft(s, SMELT_RECIPES, "smelt");
+        changed = true;
+      } else if (s.action.kind === "smith" && now >= s.action.next) {
+        finishCraft(s, SMITH_RECIPES, "smith");
         changed = true;
       } else if (s.action.kind === "combat") {
         combatTick(s, now);
@@ -1124,6 +1422,7 @@ function tick(dt, now) {
     if (n.depleted && n.respawnAt && now >= n.respawnAt) {
       n.depleted = false;
       n.respawnAt = 0;
+      n.charges = n.maxCharges || 1;
       changed = true;
     }
   }
@@ -1153,7 +1452,7 @@ function tick(dt, now) {
           m.path = path;
         } else if (now >= m.nextHit) {
           m.nextHit = now + 1400;
-          hitPlayer(victim, 1 + Math.floor(Math.random() * 3));
+          hitPlayer(victim, 1 + Math.floor(Math.random() * 3) + Math.floor((m.level || 1) / 5), m.name);
           changed = true;
         }
       }

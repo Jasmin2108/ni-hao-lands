@@ -420,3 +420,109 @@ body.touch-on #key-hint { bottom: 140px; }
   body.touch-on #panel-toggle { bottom: 8px; }
   body.touch-on #action-label, body.touch-on #key-hint { bottom: 120px; }
 }
+
+/* ---- cozy wood / paper / red-gold theme ---- */
+:root {
+  --wood-1: #3b2616; --wood-2: #33200f; --wood-3: #4a3020;
+  --paper-1: #f4e6c4; --paper-2: #e8d4a6;
+}
+.topbar {
+  background:
+    linear-gradient(180deg, rgba(255,220,150,.08), rgba(0,0,0,.18)),
+    repeating-linear-gradient(90deg, var(--wood-1) 0 22px, var(--wood-2) 22px 24px, var(--wood-3) 24px 46px, var(--wood-2) 46px 48px);
+  border-bottom: 3px solid var(--gold);
+  box-shadow: 0 2px 0 #5a1810, 0 4px 10px rgba(0,0,0,.4);
+  position: relative; z-index: 3;
+}
+.brand strong { font-size: 17px; letter-spacing: .02em; text-shadow: 0 2px 0 #6b1d14; }
+.status > span { background: rgba(20,12,6,.45); border: 1px solid rgba(212,160,23,.45); padding: 1px 8px; }
+#holder-badge, .nihala-badge {
+  background: linear-gradient(#f0c050, #b8860b) !important; color: #3a1a08 !important; border: 1px solid #fff0a8 !important;
+  font-weight: 800; font-size: 11px; padding: 1px 7px; text-transform: lowercase;
+}
+.nihala-badge[hidden] { display: none !important; }
+.panel {
+  background:
+    linear-gradient(180deg, rgba(255,220,150,.05), rgba(0,0,0,.12)),
+    repeating-linear-gradient(0deg, #2e1d10 0 26px, #2a1a0e 26px 28px, #35220f 28px 54px, #2a1a0e 54px 56px);
+  border-left: 3px solid var(--gold-dim);
+}
+.tabs { background: #1e130a; border-bottom: 2px solid var(--gold-dim); gap: 2px; padding: 3px 3px 0; }
+.tabs button {
+  background: linear-gradient(#e9d6aa, #cdb27c); color: #3a2414; border: 1px solid #8a6a3a; border-bottom: 0;
+  font-weight: 700; border-right: 1px solid #8a6a3a;
+}
+.tabs button.on { background: linear-gradient(#c44a32, #8c2c1c); color: #fff3c8; border-color: var(--gold); }
+.tab { scrollbar-color: #8a6a3a #1e130a; }
+.skill {
+  background: rgba(244,230,196,.06); border: 1px solid rgba(212,160,23,.28); padding: 6px 8px;
+}
+.skill .row { align-items: center; }
+.skill-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: #fff0cf; }
+.skill .lvl { color: #ffe08a; font-weight: 800; }
+.px-icon { width: 24px; height: 24px; image-rendering: pixelated; image-rendering: crisp-edges; flex: none; }
+.bar { height: 9px; background: #140c06; border: 1px solid #6b4e2e; box-shadow: inset 0 1px 0 rgba(0,0,0,.6); }
+.bar > i { background: linear-gradient(#ffe08a, #d4a017 55%, #8a6a12); }
+.slots { gap: 5px; }
+.slot {
+  position: relative; aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 40%, #3a2818, #1a110a 75%);
+  border: 2px solid #4a3220; box-shadow: inset 0 0 0 1px #000, inset 0 2px 4px rgba(0,0,0,.6); padding: 2px;
+}
+.slot .px-icon { width: 32px; height: 32px; }
+.slot .qty { position: absolute; top: 2px; left: 4px; float: none; font-size: 11px; font-weight: 800; color: #ffe08a; text-shadow: 0 1px 0 #000; }
+.slot .slot-name { font-size: 9px; line-height: 1.1; color: #e6d3a8; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot.worn { border-color: var(--gold); box-shadow: inset 0 0 0 1px #000, 0 0 6px rgba(240,192,80,.5); }
+.slot:hover { border-color: #f0c96a; }
+.shop-row {
+  gap: 8px; background: linear-gradient(rgba(244,230,196,.07), rgba(244,230,196,.02));
+  border: 1px solid rgba(212,160,23,.35);
+}
+.shop-row .shop-info { flex: 1; min-width: 0; }
+.shop-row button, .holder-claim {
+  background: linear-gradient(#e0b040, #a87a14); color: #2a1404; border: 1px solid #fff0a8; font-weight: 800; cursor: pointer;
+}
+#enter, #wallet-signin, #chat-form button, #connect-wallet, #upload-avatar-btn, #change-name-btn, #rename-save, #name-prompt-save {
+  box-shadow: inset 0 1px 0 rgba(255,240,200,.35), inset 0 -2px 0 rgba(0,0,0,.3), 0 2px 0 #3a1008;
+}
+.chat-dock {
+  background: linear-gradient(rgba(20,12,6,.96), rgba(14,9,5,.98));
+  border-top: 3px solid var(--gold-dim);
+}
+#chat-input { background: #f4e6c4; color: #2a1c12; border: 1px solid #8a6a3a; }
+#chat-input::placeholder { color: #8a6a4a; }
+#minimap-wrap { border: 3px solid #d4a017; box-shadow: 0 0 0 2px #5a1810, 0 4px 12px rgba(0,0,0,.5); background: #1a110a; }
+#minimap { image-rendering: pixelated; }
+#toasts div {
+  background: linear-gradient(var(--paper-1), var(--paper-2)); color: #2a1c12; border: 2px solid #8a6a3a;
+  box-shadow: 0 0 0 1px #3a2414, 0 3px 8px rgba(0,0,0,.35); font-weight: 600;
+}
+#examine { background: rgba(244,230,196,.95); color: #2a1c12; border: 2px solid #8a6a3a; box-shadow: 0 0 0 1px #3a2414; }
+#action-label { background: linear-gradient(#c44a32, #8c2c1c); color: #fff3c8; border: 1px solid var(--gold); font-weight: 700; }
+#zone-banner {
+  background: linear-gradient(#b8322a, #7a1d16); color: #fff3c8; border: 2px solid var(--gold);
+  box-shadow: 0 0 0 3px #3a1008, 0 6px 16px rgba(0,0,0,.45); font-weight: 800; letter-spacing: .08em; padding: 10px 26px;
+}
+.fanfare-card { background: linear-gradient(#b8322a, #6e1a12); box-shadow: 0 0 0 3px #3a1008, 0 0 30px rgba(255,200,80,.45); }
+#zoom-controls button, #panel-toggle, #chat-toggle {
+  background: linear-gradient(rgba(70,40,22,.95), rgba(36,20,10,.95)); border: 2px solid var(--gold-dim);
+  box-shadow: inset 0 1px 0 rgba(255,220,150,.2);
+}
+#context-menu { background: linear-gradient(var(--paper-1), var(--paper-2)); border: 2px solid #8a6a3a; box-shadow: 0 0 0 1px #3a2414, 0 8px 24px rgba(0,0,0,.5); }
+#context-menu button { color: #2a1c12; font-weight: 600; }
+#context-menu button:hover, #context-menu button:focus { background: #b8322a; color: #fff3c8; }
+.quest { background: rgba(244,230,196,.07); border: 1px solid rgba(212,160,23,.35); }
+.rank-row img { image-rendering: auto; border: 1px solid #8a6a3a; }
+.nihala-box { background: rgba(244,230,196,.07); border: 1px solid rgba(212,160,23,.45); padding: 8px; margin-bottom: 10px; }
+.nihala-box h3 { margin: 0 0 6px; color: #ffe08a; font-size: 14px; }
+.nihala-box .ca { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; word-break: break-all; color: #ffe08a; }
+.nihala-box .disclaimer { font-size: 11px; color: #e6c48e; border-top: 1px dashed rgba(212,160,23,.4); padding-top: 6px; margin-top: 8px; }
+.holder-claim { padding: 4px 10px; font-size: 12px; }
+.holder-claim[disabled] { opacity: .55; cursor: default; }
+@media (hover: none) { .shop-row button, .holder-claim { min-height: 44px; } }
+.chat-badge { font-size: 9px !important; padding: 0 4px !important; vertical-align: 1px; }
+#nihala-status .nihala-badge { margin-right: 4px; }
+#nihala-tools .shop-row { align-items: center; }
+footer .ca { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.nihala-box button.ca { background: rgba(20,12,6,.65); color: #ffe08a; border: 1px solid rgba(212,160,23,.55); padding: 2px 6px; cursor: copy; max-width: 100%; }
+.nihala-box button.ca:hover { background: rgba(60,36,12,.8); }

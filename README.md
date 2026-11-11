@@ -60,7 +60,7 @@ This is a single Node process that serves `public/` and accepts WebSockets on th
 5. Use HTTPS on the public URL so wallets and secure WebSockets (`wss`) work.
 6. Optional env:
    - `SOLANA_RPC` — public RPC for the read-only holder check (default mainnet-beta).
-   - `COMPANION_MINT` — leave unset until a companion token exists.
+   - (no token env needed) — the $nihala CA, holder threshold and cache times are constants in `server.js` (`NIHALA_MINT`, `NIHALA_HOLDER_MIN`, `NIHALA_CACHE_MS`, `NIHALA_RECHECK_MS`).
    - `DATA_DIR` — folder for `players.json` and uploaded pictures when Postgres is not used (default `./data`).
    - `DATABASE_URL` — optional Postgres connection string. When set, accounts (keyed by session token, unique wallet address) and uploaded pictures (bytea, served from `/avatars/<id>`) are stored in Postgres. Tables are created on boot if they are missing. When unset, the game falls back to `data/players.json` and `data/avatars`.
    - `ADMIN_KEY` — required to reset a reported custom picture (see below). If unset, the admin endpoint refuses every request.
@@ -69,6 +69,22 @@ This is a single Node process that serves `public/` and accepts WebSockets on th
 **Render:** new Web Service, Node, `npm install` + `npm start`. Set `DATABASE_URL` to the **internal** Postgres URL if you attached a Render Postgres instance in the same region. That is how wallet logins and pictures survive a restart or redeploy.
 
 On the **free** web plan, the local disk is still ephemeral: without `DATABASE_URL`, `data/players.json` and uploaded pictures reset on every restart or redeploy. A **free Render Postgres** database expires **30 days after creation**. After it expires it is inaccessible unless you upgrade to a paid compute plan. There is then a **14-day grace period** to upgrade; after that, Render permanently deletes the database and its data. Free Postgres is also limited to 1 GB, one free database per workspace, no backups, and may restart for maintenance. [Render free-plan docs](https://render.com/docs/free).
+
+## $nihala holder perks (read-only)
+
+$nihala (lowercase ticker) is live on pump.fun, paired with $mihao. CA `FNkoLTsBFEMjhM6qwUhnRwAzJcSCURfgeEmC1hGcsHao` · [chart](https://dexscreener.com/solana/8fytcqt1hzjyh2zv26qw6mhkqzasxeugu7i1hzuyutna).
+
+- Only for players signed in with a wallet (the existing signMessage login). The server reads the SPL balance with `getTokenAccountsByOwner` on a public RPC (mint filter, which covers Token and Token-2022; per-program scan as a fallback). Nothing is ever signed, built or sent.
+- Holder = balance above `NIHALA_HOLDER_MIN` (0). Results are cached ~7 minutes; online players are re-checked on login and every ~8 minutes. Perks pause when the balance reads 0, and resume when it is back.
+- Holders get a **nihala holder** badge by their name (nametag, HUD, chat), free one-time claims of three holder tools (Golden Cat Rod, Lucky Jade Axe, Lucky Pickaxe: iron-tier, a little quicker than iron, can't be sold) and a ~3% chance at rare finds while gathering (Lucky Golden Koi, Lucky Cat Gem, Golden Bamboo, Golden Yarn). The bigger koi is kept off the fish leaderboard so ranks stay fair.
+- Non-holders see a polite line with the CA and: *Holder perks are in-game only. Not financial advice. $mihao rewards for holders are planned, not promised.*
+- There are no buy buttons, swaps or fund-moving links. The only token link is the plain DexScreener chart.
+- Tests: `npm run test:nihala` (mock RPC: holder, non-holder, balance to 0, guest, Token + Token-2022). `node test-nihala-holder.mjs https://host` checks the non-holder path on a live host with a fresh test wallet.
+
+## Smooth movement and network
+
+- Remote players and mobs are drawn ~110 ms behind the server clock and interpolated between snapshots (no snapping between ticks). Your own keyboard/joystick moves are predicted locally and reconciled with the server (rejected steps glide back).
+- Clients that send `hello {proto: 2}` get `delta` messages: only changed entities within 26 tiles, positions as compact arrays, removals when someone leaves range. Older clients still get the full `state` message. Updates are coalesced to one flush per 100 ms tick. `npm run test:delta` covers this.
 
 ## Custom pictures (admin)
 

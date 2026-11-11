@@ -12,7 +12,9 @@
     "test:leaderboard": "node test-leaderboard.mjs",
     "test:rename": "node test-rename.mjs",
     "test:world": "node test-world.mjs",
-    "test:move": "node test-move-intents.mjs"
+    "test:move": "node test-move-intents.mjs",
+    "test:nihala": "node test-nihala-holder.mjs",
+    "test:delta": "node test-delta-state.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -46,6 +46,7 @@
       <div class="status">
         <span id="player-name"></span>
         <span id="holder-badge" hidden title="Read-only $mihao balance check">持有 holder</span>
+        <span id="nihala-badge" class="nihala-badge" hidden title="Read-only $nihala balance check. Holder perks are in-game only.">nihala holder</span>
         <span class="gold" id="gold">0 gold</span>
         <span id="hp-wrap">HP <span id="hp">20</span>/20</span>
       </div>
@@ -99,7 +100,7 @@
         <button data-tab="inv">Inventory</button>
         <button data-tab="shop">Shop</button>
         <button data-tab="bank">Bank</button>
-        <button data-tab="premium">Premium</button>
+        <button data-tab="premium">$nihala</button>
         <button data-tab="ranks">Ranks</button>
         <button data-tab="quests">Quests</button>
       </div>
@@ -124,11 +125,18 @@
         <div id="ranks-you" hidden></div>
       </div>
       <div id="tab-premium" class="tab">
-        <p class="warn">Premium shop is a <strong>design stub</strong>. Nothing here can spend tokens or SOL. There is no purchase transaction in this game.</p>
-        <div id="premium-list"></div>
+        <div id="nihala-panel" class="nihala-box">
+          <h3>$nihala holder perks</h3>
+          <p id="nihala-status" class="fine">Sign in with a Solana wallet to check for holder perks.</p>
+          <p class="fine">$nihala CA: <button type="button" class="ca" id="copy-nihala-ca" title="Copy $nihala contract">FNkoLTsBFEMjhM6qwUhnRwAzJcSCURfgeEmC1hGcsHao</button>
+            · <a id="nihala-chart" href="https://dexscreener.com/solana/8fytcqt1hzjyh2zv26qw6mhkqzasxeugu7i1hzuyutna" target="_blank" rel="noopener">chart</a></p>
+          <p class="disclaimer" id="nihala-disclaimer">Holder perks are in-game only. Not financial advice. $mihao rewards for holders are planned, not promised.</p>
+          <p class="fine">Holders (balance above 0) get a <strong>nihala holder</strong> badge by their name, free holder tools (Golden Cat Rod, Lucky Jade Axe, Lucky Pickaxe: iron-tier, a little quicker) and a small chance at rare finds such as a bigger Lucky Golden Koi. Perks pause if the balance reads 0. The balance is re-checked on login and every few minutes.</p>
+          <div id="nihala-tools"></div>
+        </div>
         <div class="wallet-box">
           <h3>Wallet (read-only)</h3>
-          <p>Sign in with a Solana wallet (a login message only — not a transaction) to keep this character on any device, or to check a $mihao holder badge. The companion-token CA is still TBA.</p>
+          <p>Sign in with a Solana wallet (a login message only, never a transaction) to keep this character on any device and to check the $mihao and $nihala holder badges. Nothing here can spend tokens or SOL.</p>
           <button id="connect-wallet" type="button">Sign in / link Solana wallet</button>
           <p id="wallet-status" class="fine"></p>
         </div>
@@ -149,7 +157,8 @@
       Art from the <a href="https://memedepot.com/d/mihao-pfps" target="_blank" rel="noopener">mihao pfps Meme Depot</a> community.
       $mihao CA <button type="button" class="ca" id="copy-ca" title="Copy contract">4CxjZyMNoF1p6eXHXHv1TWpS2X47CuUmLwtGe18spump</button>
       · <a href="https://dexscreener.com/solana/ho1asg6wgh1ffxdehrk2f4ggt1hoxo9s5jclmdqeyebz" target="_blank" rel="noopener">DexScreener chart</a>
-      · Companion token CA: <span id="companion-ca" class="placeholder"><!-- COMPANION_TOKEN_CA_PLACEHOLDER -->TBA — paste address here after launch</span>
+      · $nihala CA <span id="companion-ca" class="ca">FNkoLTsBFEMjhM6qwUhnRwAzJcSCURfgeEmC1hGcsHao</span>
+      · <a href="https://dexscreener.com/solana/8fytcqt1hzjyh2zv26qw6mhkqzasxeugu7i1hzuyutna" target="_blank" rel="noopener">$nihala chart</a>
     </footer>
   </div>
 
@@ -168,6 +177,7 @@
     </div>
   </div>
 
+  <script src="/gfx.js"></script>
   <script src="/game.js"></script>
 </body>
 </html>

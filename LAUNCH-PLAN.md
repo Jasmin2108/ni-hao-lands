@@ -1,4 +1,6 @@
-# Companion token launch plan (research only)
+# $nihala companion token plan (research only)
+
+> **Status 2026-11-11:** $nihala (lowercase ticker) is live on pump.fun, paired with $mihao. CA `FNkoLTsBFEMjhM6qwUhnRwAzJcSCURfgeEmC1hGcsHao`, chart: https://dexscreener.com/solana/8fytcqt1hzjyh2zv26qw6mhkqzasxeugu7i1hzuyutna. The game now has read-only **$nihala holder perks** (badge, free holder tools, small rare-find chance). Holder perks are in-game only. Not financial advice. $mihao rewards for holders are planned, not promised. There are still no purchases, swaps or fund-moving links in the game.
 
 This is a practical plan for Jasmin, not a recommendation to launch, and not financial advice. Nobody here will create or deploy a token, touch a wallet, or move funds. If a token is launched, **Jasmin does it from her own wallet.**
 
@@ -25,8 +27,8 @@ Pick one after a search for existing tickers and after talking to the $mihao tea
 Three different things get called "paired." They are not the same, and only some of them belong in a fan project.
 
 1. **A liquidity pool quoted against $mihao** (PumpSwap after a pump.fun-style launch, or later Meteora / Raydium). This is what mihao.fun already lists as its ecosystem. Buying the new token then spends $mihao. That can look like an extraction play, especially if you hide a large dev bag. If you ever do this, say so plainly, keep the bag small or at zero, and get the official team on board first.
-2. **Game utility, no pool required.** The world already uses *in-game gold* for the normal shop. A future companion token could unlock cosmetics in the Premium shop, but only after the flow in `TOKEN-PURCHASE-FLOW.md` is legally reviewed and actually built. Today those buttons are disabled.
-3. **Holder perks via a read-only wallet check.** The prototype can already connect Phantom (if present) and read an SPL balance on a public RPC. A $mihao holder can get a badge. Later, $mihao or companion-token holders could get a cosmetic, a chat flair, or a leaderboard flag. This does **not** require a swap or a transfer.
+2. **Game utility, no pool required.** The world already uses *in-game gold* for the normal shop. $nihala could later unlock cosmetics in the Premium shop, but only after the flow in `TOKEN-PURCHASE-FLOW.md` is legally reviewed and actually built. Today there are no buy buttons at all; the old disabled stubs were removed from the UI.
+3. **Holder perks via a read-only wallet check.** The prototype can already connect Phantom (if present) and read an SPL balance on a public RPC. A $mihao holder can get a badge. $nihala holders now get a badge, free holder tools and a small rare-find chance (in-game only). This does **not** require a swap or a transfer.
 
 A sensible order: ship the fan game first, ask the team and the cat's owner, *then* decide whether a token is even wanted. A game that already works is a cleaner "pair" than another ticker riding $mihao's pool list.
 
@@ -34,7 +36,7 @@ A sensible order: ship the fan game first, ask the team and the cat's owner, *th
 
 - **Gold** comes from fishing, yarn, mining, cooking, selling, and rival dogs. It buys the ordinary shop (scarves, bells, cooked fish). This is play money.
 - **Bank** is storage, not a vault for real assets.
-- **Premium shop** is a stub priced in a future companion token. No purchases, no treasury, no signing.
+- **$nihala holder perks** replace the old Premium stubs: read-only balance check, no purchases, no treasury, no signing.
 - **$mihao holder badge** is a read-only perk. It should never look like a dividend, revenue share, or investment return.
 - Do not add loot boxes, chance buys, or tradable item cash-out for tokens. That is how these projects start looking like gambling or like a security.
 
@@ -47,14 +49,14 @@ Only after talking to the $mihao team and the cat's owner. Steps are the usual p
 3. Use **original or licensed art** — or official permission to use depot PFPs. Do not lift the owner's photographs or official brand as if they were yours.
 4. Prefer **no large dev allocation**. If you keep any, say the exact amount and lock or publish the wallet. Hidden bags are why these get called rugs.
 5. If you want it "paired" to $mihao, that usually means the launch quote or a later pool is $mihao rather than SOL. Understand that sells of your token dump $mihao into the pool and can annoy the same community you want as players.
-6. After the contract exists, paste it into the game footer (`COMPANION_TOKEN_CA_PLACEHOLDER` in `public/index.html`) and set `COMPANION_MINT` on the server so the holder check can see it. Still do not turn on purchases without a legal pass.
+6. Done for $nihala: the CA is in the game footer, the $nihala tab and `NIHALA_MINT` in `server.js`. Still do not turn on purchases without a legal pass.
 7. Announce it as an unofficial fan-game token. Do not pose as the official team. Do not promise price, listings, or profit.
 
 ## How the game would connect later
 
-- Footer + `/api/config` already have a companion CA placeholder.
-- Holder badge: `GET /api/holder/:address` (read-only RPC).
-- Optional later: a leaderboard or cosmetic gated on a $mihao or companion balance.
+- Footer, the $nihala tab and `/api/config` show the $nihala CA and chart link.
+- Holder status: `GET /api/holder/:address` (read-only RPC) returns $mihao and $nihala balances.
+- Optional later: more cosmetics gated on a $mihao or $nihala balance.
 - Optional later: Premium fulfilment only by verifying a player-signed transfer, as written in `TOKEN-PURCHASE-FLOW.md` — never by the server sending funds.
 
 ## Risks (read these before doing anything public)
@@ -72,6 +74,6 @@ Only after talking to the $mihao team and the cat's owner. Steps are the usual p
 - [ ] Credit the Meme Depot in the footer (already done).
 - [ ] Search tickers so you are not colliding with a copycat.
 - [ ] If launching: you do it from your wallet; no hidden allocation; unofficial description; official CA in the bio.
-- [ ] Paste the new CA into the game placeholder; do not enable token checkout.
+- [x] $nihala CA is in the game (footer + $nihala tab); token checkout stays off.
 - [ ] Legal review before any token-priced item or paid access.
 - [ ] Never present this as financial advice or as an official $mihao product.

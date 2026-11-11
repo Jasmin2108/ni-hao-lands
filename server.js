@@ -32,8 +32,19 @@ const AVATAR_UPLOAD_COOLDOWN_MS = 30000;
 const RENAME_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const ADMIN_KEY = (process.env.ADMIN_KEY || "").trim();
 const PUBLIC_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-const COMPANION_MINT = (process.env.COMPANION_MINT || "").trim(); // TBA until launch
-const COMPANION_TOKEN_PROGRAM = process.env.COMPANION_TOKEN_PROGRAM || "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+// $nihala (lowercase ticker) holder perks. Read-only SPL balance checks; nothing is ever signed or sent.
+const NIHALA_MINT = "FNkoLTsBFEMjhM6qwUhnRwAzJcSCURfgeEmC1hGcsHao";
+const NIHALA_DEXSCREENER = "https://dexscreener.com/solana/8fytcqt1hzjyh2zv26qw6mhkqzasxeugu7i1hzuyutna";
+const NIHALA_HOLDER_MIN = 0; // holder = balance strictly greater than this
+const NIHALA_CACHE_MS = 7 * 60 * 1000; // RPC result cache (5–10 min)
+const NIHALA_RECHECK_MS = Number(process.env.NIHALA_RECHECK_MS) || 8 * 60 * 1000; // periodic re-check for online players
+const NIHALA_RARE_CHANCE = process.env.NIHALA_RARE_CHANCE != null ? Number(process.env.NIHALA_RARE_CHANCE) : 0.03;
+const NIHALA_DISCLAIMER = "Holder perks are in-game only. Not financial advice. $mihao rewards for holders are planned, not promised.";
+const HOLDER_TOOLS = ["golden_cat_rod", "lucky_jade_axe", "lucky_pickaxe"];
+const nihalaChecker = require("./holders").createHolderChecker({
+  rpc: PUBLIC_RPC, mint: NIHALA_MINT, minBalance: NIHALA_HOLDER_MIN,
+  cacheMs: Number(process.env.NIHALA_CACHE_MS) || NIHALA_CACHE_MS,
+});
 
 const TICK_MS = 100;
 const WALK_SPEED = 4.2; // tiles / second
@@ -559,6 +570,7 @@ function publicPlayer(s) {
     equipped: s.account.equipped,
     action: s.action ? s.action.kind : null,
     holder: !!s.holderBadge,
+    nihala: isNihalaHolder(s),
     premiumName: !!s.account.equipped?.gold_nametag,
     wallet: s.account.wallet || null,
     walletLabel: shortWallet(s.account.wallet),
@@ -586,7 +598,72 @@ function mePayload(s) {
     quests: s.account.quests || normalizeQuests(null),
     combatLevel: combatLevel(s.account),
     bonuses: equipmentBonuses(s.account),
+    nihalaStatus: nihalaStatusPayload(s),
   };
+}
+
+// ---------- $nihala holder perks ----------
+function isNihalaHolder(s) {
+  return !!(s && s.account && s.account.wallet && s.nihala && s.nihala.holder && s.nihala.owner === s.account.wallet);
+}
+function nihalaStatusPayload(s) {
+  const st = s.nihala;
+  const signedIn = !!s.account.wallet;
+  return {
+    signedIn,
+    holder: isNihalaHolder(s),
+    balance: st && signedIn ? st.balance : 0,
+    checkedAt: st ? st.checkedAt : null,
+    checking: !!s.nihalaChecking,
+    error: st && st.error ? "Balance check unavailable right now; will retry." : null,
+    tools: HOLDER_TOOLS.map((id) => ({ id, name: ITEMS[id].name, owned: ownsItem(s.account, id) })),
+  };
+}
+function ownsItem(account, id) {
+  return (account.inventory || []).some((i) => i.id === id) || !!(account.bank && account.bank[id] > 0) ||
+    Object.values(account.equipped || {}).includes(id);
+}
+async function refreshNihala(s, force = false) {
+  const owner = s.account.wallet;
+  if (!owner || s.nihalaChecking) return;
+  s.nihalaChecking = true;
+  const was = isNihalaHolder(s);
+  try {
+    s.nihala = await nihalaChecker.check(owner, { force });
+  } catch (e) {
+    s.nihala = { owner, holder: false, balance: 0, checkedAt: Date.now(), error: String(e.message || e) };
+  } finally {
+    s.nihalaChecking = false;
+    s.nihalaNextCheck = Date.now() + NIHALA_RECHECK_MS;
+  }
+  if (!sessionsHas(s)) return;
+  const now = isNihalaHolder(s);
+  if (now && !was) toast(s, "nihala holder perks active: holder badge, holder tools and rare finds.");
+  if (!now && was) toast(s, "Your $nihala balance reads 0, so holder perks are paused.");
+  send(s.ws, { type: "me", me: mePayload(s) });
+  if (now !== was) broadcastState();
+}
+function sessionsHas(s) { return sessions.get(s.ws) === s; }
+function claimHolderTool(s, itemId) {
+  if (!HOLDER_TOOLS.includes(itemId)) { toast(s, "That isn't a holder tool."); return; }
+  if (!isNihalaHolder(s)) { toast(s, "Holder tools need a wallet sign-in holding $nihala."); return; }
+  if (ownsItem(s.account, itemId)) { toast(s, `You already have the ${ITEMS[itemId].name}.`); return; }
+  if (!invAdd(s.account.inventory, itemId, 1)) { toast(s, "Your inventory is full."); return; }
+  toast(s, `You receive the ${ITEMS[itemId].name}. Holder perk, in-game only.`);
+  send(s.ws, { type: "me", me: mePayload(s) });
+}
+const HOLDER_DROPS = { fishing: "raw_lucky_koi", mining: "lucky_cat_gem", woodcutting: "golden_bamboo", yarn: "golden_yarn" };
+function rollHolderDrop(s, node) {
+  if (!isNihalaHolder(s)) return null;
+  const drop = HOLDER_DROPS[node.skill];
+  if (!drop || Math.random() >= NIHALA_RARE_CHANCE) return null;
+  if (!invAdd(s.account.inventory, drop, 1)) return null;
+  if (drop === "raw_lucky_koi") {
+    // a bigger golden koi; kept off the fish leaderboard so it stays fair
+    const kg = Math.round(rollFishKg("golden_koi") * 1.15 * 10) / 10;
+    return `Lucky! A ${kg.toFixed(1)} kg Lucky Golden Koi bites too (holder rare find).`;
+  }
+  return `Lucky! You also find ${ITEMS[drop].name} (holder rare find).`;
 }
 
 function compactNodes() {
@@ -624,23 +701,83 @@ function nearbyOf(s, list, radius = VIEW_RADIUS) {
   return list.filter((o) => Math.hypot((o.x - s.x), (o.y - s.y)) <= radius);
 }
 
-function broadcastState() {
+// State updates are coalesced: callers mark the world dirty and the tick flushes at most once per TICK_MS.
+let stateDirty = false;
+function broadcastState() { stateDirty = true; }
+
+// Delta protocol (hello {proto: 2}): only changed entities within DELTA_RADIUS, positions as compact arrays.
+const DELTA_RADIUS = 26;
+const FACE_CODE = { down: 0, up: 1, left: 2, right: 3 };
+function playerPosKey(pp) { return pp.x + "," + pp.y + "," + pp.facing + "," + (pp.action || "") + "," + pp.hp; }
+function playerRestKey(pp) {
+  return JSON.stringify([pp.name, pp.avatar, pp.zone, pp.maxHp, pp.equipped, pp.holder, pp.nihala, pp.premiumName, pp.wallet, pp.walletLabel, pp.combatLevel]);
+}
+function flushState() {
+  stateDirty = false;
+  const now = Date.now();
   const allNodes = compactNodes();
   const allMobs = compactMobs();
   const everyone = [...sessions.values()];
+  const pub = new Map();
+  for (const o of everyone) pub.set(o.id, publicPlayer(o));
   for (const s of everyone) {
     if (!s.ws || s.ws.readyState !== 1) continue;
+    if (s.proto === 2) { sendDelta(s, everyone, pub, allNodes, allMobs, now); continue; }
     const players = everyone
       .filter((o) => o.id === s.id || Math.hypot(o.x - s.x, o.y - s.y) <= VIEW_RADIUS)
-      .map(publicPlayer);
+      .map((o) => pub.get(o.id));
     send(s.ws, {
       type: "state",
       players,
       nodes: nearbyOf(s, allNodes),
       mobs: nearbyOf(s, allMobs),
-      t: Date.now(),
+      t: now,
     });
   }
+}
+function sendDelta(s, everyone, pub, allNodes, allMobs, now) {
+  const sent = s.sent || (s.sent = { p: new Map(), n: new Map(), m: new Map() });
+  const msg = { type: "delta", t: now };
+  let any = false;
+  // players
+  const seenP = new Set();
+  for (const o of everyone) {
+    if (o.id !== s.id && Math.abs(o.x - s.x) > DELTA_RADIUS && Math.abs(o.y - s.y) > DELTA_RADIUS) continue;
+    if (o.id !== s.id && Math.hypot(o.x - s.x, o.y - s.y) > DELTA_RADIUS) continue;
+    seenP.add(o.id);
+    const pp = pub.get(o.id);
+    const rest = playerRestKey(pp), pos = playerPosKey(pp);
+    const prev = sent.p.get(o.id);
+    if (!prev || prev.rest !== rest) {
+      (msg.p || (msg.p = [])).push(pp); any = true;
+      sent.p.set(o.id, { rest, pos });
+    } else if (prev.pos !== pos) {
+      (msg.q || (msg.q = [])).push([o.id, pp.x, pp.y, FACE_CODE[pp.facing] || 0, pp.action || 0, pp.hp]); any = true;
+      prev.pos = pos;
+    }
+  }
+  for (const id of sent.p.keys()) if (!seenP.has(id)) { (msg.pr || (msg.pr = [])).push(id); sent.p.delete(id); any = true; }
+  // nodes: positions are static, only depletion/charges change (wider radius for the minimap)
+  const seenN = new Set();
+  for (const e of allNodes) {
+    if (Math.abs(e.x - s.x) > VIEW_RADIUS || Math.abs(e.y - s.y) > VIEW_RADIUS) continue;
+    seenN.add(e.id);
+    const key = e.depleted + "," + e.charges;
+    if (sent.n.get(e.id) !== key) { (msg.n || (msg.n = [])).push(e); sent.n.set(e.id, key); any = true; }
+  }
+  for (const id of sent.n.keys()) if (!seenN.has(id)) { (msg.nr || (msg.nr = [])).push(id); sent.n.delete(id); any = true; }
+  // mobs: full record when hp/alive changes, compact [id,x,y] when only moving
+  const seenM = new Set();
+  for (const e of allMobs) {
+    if (Math.abs(e.x - s.x) > DELTA_RADIUS || Math.abs(e.y - s.y) > DELTA_RADIUS) continue;
+    seenM.add(e.id);
+    const rest = e.hp + "," + e.maxHp + "," + e.alive + "," + e.level + "," + e.name, pos = e.x + "," + e.y;
+    const prev = sent.m.get(e.id);
+    if (!prev || prev.rest !== rest) { (msg.m || (msg.m = [])).push(e); sent.m.set(e.id, { rest, pos }); any = true; }
+    else if (prev.pos !== pos) { (msg.mq || (msg.mq = [])).push([e.id, e.x, e.y]); prev.pos = pos; any = true; }
+  }
+  for (const id of sent.m.keys()) if (!seenM.has(id)) { (msg.mr || (msg.mr = [])).push(id); sent.m.delete(id); any = true; }
+  if (any || now - (s.lastDeltaAt || 0) > 2000) { s.lastDeltaAt = now; send(s.ws, msg); }
 }
 
 function systemChat(text) {
@@ -690,15 +827,17 @@ function invHasRoom(inv, itemId) {
   return !!(def && def.stack && invCount(inv, itemId) > 0);
 }
 
-function bestTool(account, kind) {
+function bestTool(account, kind, session) {
   if (!kind) return null;
   let best = null;
   const skill = kind === "pickaxe" ? "mining" : kind === "axe" ? "woodcutting" : kind === "rod" ? "fishing" : null;
   const lvl = skill ? skillLevelOf(account, skill) : 99;
+  const holderOk = !!(session && isNihalaHolder(session));
   const consider = (id) => {
     const def = ITEMS[id];
     if (!def || def.tool !== kind) return;
     if ((def.toolLevel || 1) > lvl) return;
+    if (def.holderOnly && !holderOk) return;
     if (!best || (def.toolTier || 0) > (best.toolTier || 0)) best = def;
   };
   for (const it of account.inventory || []) consider(it.id);
@@ -717,7 +856,7 @@ function toolKindFor(node) {
 function gatherDuration(s, node) {
   let time = node.time || 2400;
   const kind = toolKindFor(node);
-  const tool = kind ? bestTool(s.account, kind) : null;
+  const tool = kind ? bestTool(s.account, kind, s) : null;
   if (tool && tool.toolSpeed) time = Math.round(time * tool.toolSpeed);
   else if ((node.toolTier || 0) <= 1 && kind) time = Math.round(time * 1.25);
   return Math.max(600, time);
@@ -733,7 +872,7 @@ function canStartGather(s, node) {
   }
   const kind = toolKindFor(node);
   if (kind && (node.toolTier || 0) >= 2) {
-    const tool = bestTool(s.account, kind);
+    const tool = bestTool(s.account, kind, s);
     if (!tool || (tool.toolTier || 0) < node.toolTier) {
       return `You need a better ${kind} for this.`;
     }
@@ -964,6 +1103,8 @@ function finishGather(s, node) {
     }
   }
   toast(s, note);
+  const rare = rollHolderDrop(s, node);
+  if (rare) toast(s, rare);
   send(s.ws, { type: "me", me: mePayload(s) });
   if (node.charges > 0) {
     const nextErr = canStartGather(s, node);
@@ -1160,6 +1301,10 @@ function bankOp(s, op, itemId, qty = 1) {
 function equipItem(s, itemId) {
   const def = ITEMS[itemId];
   if (!def || !def.slot) { toast(s, "You can't wear that."); return; }
+  if (def.holderOnly && !isNihalaHolder(s) && s.account.equipped[def.slot] !== itemId) {
+    toast(s, "Holder tools work while your signed-in wallet holds $nihala. Perks are paused.");
+    return;
+  }
   if (!s.account.inventory.some((i) => i.id === itemId) && s.account.equipped[def.slot] !== itemId) {
     toast(s, "You don't have that.");
     return;
@@ -1202,7 +1347,7 @@ function handleChat(s, text) {
   }
   s.lastChat = now;
   s.chatTimes.push(now);
-  const entry = { from: s.account.name, text: cleaned, ts: now, system: false, holder: !!s.holderBadge };
+  const entry = { from: s.account.name, text: cleaned, ts: now, system: false, holder: !!s.holderBadge, nihala: isNihalaHolder(s) };
   chatLog.push(entry);
   if (chatLog.length > MAX_CHAT_LOG) chatLog.shift();
   broadcast({ type: "chat", ...entry });
@@ -1218,6 +1363,8 @@ function welcomePayload(s) {
       tiles,
       spawn: staticWorld.spawn,
       npcs: staticWorld.npcs,
+      walk: [...world.WALK],
+      speed: WALK_SPEED,
     },
     items: ITEMS,
     skills: SKILLS,
@@ -1225,9 +1372,14 @@ function welcomePayload(s) {
     shop: SHOP,
     premiumShop: PREMIUM_SHOP,
     mihaoMint: MIHAO_MINT,
-    companionMint: COMPANION_MINT || null,
+    companionMint: NIHALA_MINT,
+    nihalaMint: NIHALA_MINT,
+    nihalaChart: NIHALA_DEXSCREENER,
+    nihalaDisclaimer: NIHALA_DISCLAIMER,
+    holderTools: HOLDER_TOOLS,
     dexscreener: DEXSCREENER,
     players: [...sessions.values()].map(publicPlayer),
+    t: Date.now(),
     nodes: compactNodes(),
     mobs: compactMobs(),
     chatLog: chatLog.slice(-40),
@@ -1295,9 +1447,11 @@ function onHello(ws, msg) {
     }
   }
   const live = newLive(ws, account, token);
+  live.proto = msg.proto === 2 ? 2 : 1;
   if (account.wallet) live.wallet = account.wallet;
   send(ws, welcomePayload(live));
   systemChat(`${account.name} has arrived in Ni Hao Village.`);
+  if (account.wallet) refreshNihala(live);
   broadcastState();
 }
 
@@ -1433,6 +1587,21 @@ function onMessage(ws, raw) {
         send(s.ws, { type: "me", me: mePayload(s) });
         if (s.holderBadge) toast(s, "mihao holder badge enabled (read-only balance check).");
       }
+      // re-read $nihala for the signed-in wallet (rate-limited; never trusts the client's claim)
+      if (s.account.wallet && Date.now() - (s.nihalaManualAt || 0) > 30000) {
+        s.nihalaManualAt = Date.now();
+        refreshNihala(s, true);
+      }
+      break;
+    case "holderCheck":
+      if (s.account.wallet && Date.now() - (s.nihalaManualAt || 0) > 30000) {
+        s.nihalaManualAt = Date.now();
+        refreshNihala(s, true);
+      } else if (!s.account.wallet) toast(s, "Sign in with a wallet first (login message only).");
+      else toast(s, "Checked recently. Try again in a little while.");
+      break;
+    case "holderClaim":
+      claimHolderTool(s, String(msg.itemId || ""));
       break;
     case "premiumBuy":
       toast(s, "Token purchases are not enabled. This is a design stub only.");
@@ -1453,33 +1622,43 @@ function tick(dt, now) {
 
   for (const s of sessions.values()) {
     if (s.path && s.path.length) {
-      const step = s.path[0];
-      const dx = step.x - s.x, dy = step.y - s.y;
-      const dist = Math.hypot(dx, dy);
-      const move = WALK_SPEED * dt;
-      const face = facingFor(dx, dy);
-      if (face) s.facing = face;
-      if (dist <= move || dist < 0.02) {
-        s.x = step.x;
-        s.y = step.y;
-        s.path.shift();
-        if (!s.path.length && s.pending) {
-          const cb = s.pending;
-          s.pending = null;
-          cb();
-        }
-        if (!s.path.length && s.stepMode) {
-          s.stepMode = false;
-          if (s.nextStep) {
-            const n = s.nextStep;
-            s.nextStep = null;
-            tryStep(s, n.dx, n.dy);
+      // Spend the whole tick's movement budget, carrying leftovers across tile boundaries so the
+      // server walks at exactly WALK_SPEED (no 1-tick pause per tile; keeps client prediction in sync).
+      let budget = WALK_SPEED * dt;
+      let guard = 0;
+      while (budget > 0 && s.path && s.path.length && guard++ < 4) {
+        const step = s.path[0];
+        const dx = step.x - s.x, dy = step.y - s.y;
+        const dist = Math.hypot(dx, dy);
+        const face = facingFor(dx, dy);
+        if (face) s.facing = face;
+        if (dist <= budget || dist < 0.02) {
+          s.x = step.x;
+          s.y = step.y;
+          budget -= dist;
+          s.path.shift();
+          if (!s.path.length && s.pending) {
+            const cb = s.pending;
+            s.pending = null;
+            cb();
+            break;
           }
+          if (!s.path.length && s.stepMode) {
+            s.stepMode = false;
+            if (s.nextStep) {
+              const n = s.nextStep;
+              s.nextStep = null;
+              tryStep(s, n.dx, n.dy);
+            }
+          }
+        } else {
+          s.x += (dx / dist) * budget;
+          s.y += (dy / dist) * budget;
+          budget = 0;
         }
-      } else {
-        s.x += (dx / dist) * move;
-        s.y += (dy / dist) * move;
       }
+      s.x = Math.round(s.x * 1000) / 1000;
+      s.y = Math.round(s.y * 1000) / 1000;
       changed = true;
       const z = zoneAt(s.x, s.y);
       if (z.id !== s.lastZone) {
@@ -1566,7 +1745,7 @@ function tick(dt, now) {
     }
   }
 
-  if (changed) broadcastState();
+  if (changed || stateDirty) flushState();
 }
 
 // --- HTTP + WS ---
@@ -1617,7 +1796,11 @@ app.get("/health", (_req, res) => {
 app.get("/api/config", (_req, res) => {
   res.json({
     mihaoMint: MIHAO_MINT,
-    companionMint: COMPANION_MINT || null,
+    companionMint: NIHALA_MINT,
+    nihalaMint: NIHALA_MINT,
+    nihalaChart: NIHALA_DEXSCREENER,
+    nihalaDisclaimer: NIHALA_DISCLAIMER,
+    nihalaHolderMin: NIHALA_HOLDER_MIN,
     dexscreener: DEXSCREENER,
     premiumShop: PREMIUM_SHOP,
     avatars: AVATARS,
@@ -1799,14 +1982,13 @@ app.get("/api/holder/:address", async (req, res) => {
   }
   try {
     const mihao = await tokenBalance(address, MIHAO_MINT, MIHAO_TOKEN_PROGRAM);
-    let companion = null;
-    if (COMPANION_MINT) companion = await tokenBalance(address, COMPANION_MINT, COMPANION_TOKEN_PROGRAM);
+    const n = await nihalaChecker.check(address);
     res.json({
       address,
       mihao,
-      companion,
+      nihala: { mint: NIHALA_MINT, uiAmount: n.balance, amount: n.amount, holder: n.holder, checkedAt: n.checkedAt, error: n.error || null },
       holder: mihao.uiAmount > 0,
-      companionHolder: !!(companion && companion.uiAmount > 0),
+      nihalaHolder: !!n.holder,
       note: "Read-only balance check. No transaction is created or signed.",
     });
   } catch (e) {
@@ -1895,6 +2077,11 @@ async function main() {
     tick(dt, now);
   }, TICK_MS);
   saveTimer = setInterval(() => { saveAccounts(); }, 20000);
+  // periodic $nihala re-check for online wallet players (perks pause when the balance hits 0)
+  setInterval(() => {
+    const now = Date.now();
+    for (const s of sessions.values()) if (s.account.wallet && now >= (s.nihalaNextCheck || 0)) refreshNihala(s);
+  }, Math.min(60000, NIHALA_RECHECK_MS));
   server.listen(PORT, HOST, () => {
     console.log(`[Ni Hao Lands] unofficial fan MMO listening on http://${HOST}:${PORT} (${persist.backend()} store)`);
     console.log("Not financial advice. No token purchases. Wallet sign-in uses signMessage only. Art from the mihao pfps Meme Depot community.");

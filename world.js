@@ -76,6 +76,15 @@ const ITEMS = {
   iron_rod: { id: "iron_rod", name: "Iron Rod", stack: false, tool: "rod", toolTier: 2, toolLevel: 15, toolSpeed: 0.82, slot: "rod", desc: "Catches up to koi, a bit faster.", sell: 40 },
   jade_rod: { id: "jade_rod", name: "Jade Rod", stack: false, tool: "rod", toolTier: 3, toolLevel: 30, toolSpeed: 0.68, slot: "rod", desc: "Catches every fish, including golden koi.", sell: 90 },
 
+  // $nihala holder perks (in-game only). Free to claim for wallet-verified holders; pause when the balance is 0.
+  golden_cat_rod: { id: "golden_cat_rod", name: "Golden Cat Rod", stack: false, tool: "rod", toolTier: 2, toolLevel: 1, toolSpeed: 0.78, slot: "rod", holderOnly: true, desc: "A gold maneki rod for $nihala holders. Iron-tier catches, a little quicker. Works only while you hold $nihala.", sell: 0 },
+  lucky_jade_axe: { id: "lucky_jade_axe", name: "Lucky Jade Axe", stack: false, tool: "axe", toolTier: 2, toolLevel: 1, toolSpeed: 0.78, slot: "axe", holderOnly: true, desc: "A jade-trimmed axe for $nihala holders. Iron-tier chopping, a little quicker. Works only while you hold $nihala.", sell: 0 },
+  lucky_pickaxe: { id: "lucky_pickaxe", name: "Lucky Pickaxe", stack: false, tool: "pickaxe", toolTier: 2, toolLevel: 1, toolSpeed: 0.78, slot: "pickaxe", holderOnly: true, desc: "A lucky-cat pickaxe for $nihala holders. Iron-tier mining, a little quicker. Works only while you hold $nihala.", sell: 0 },
+  raw_lucky_koi: { id: "raw_lucky_koi", name: "Raw Lucky Golden Koi", stack: true, holderDrop: true, desc: "An extra-large golden koi. A rare $nihala holder catch.", sell: 18, cook: "cooked_golden_koi", cookLevel: 1, cookXp: 60, cookTime: 3000 },
+  lucky_cat_gem: { id: "lucky_cat_gem", name: "Lucky Cat Gem", stack: true, holderDrop: true, desc: "A little cat-shaped gem. A rare $nihala holder find.", sell: 15 },
+  golden_bamboo: { id: "golden_bamboo", name: "Golden Bamboo", stack: true, holderDrop: true, desc: "A cane that shines like gold. A rare $nihala holder find.", sell: 8 },
+  golden_yarn: { id: "golden_yarn", name: "Golden Yarn", stack: true, holderDrop: true, desc: "Glittering yarn. A rare $nihala holder find.", sell: 8 },
+
   bronze_sword: { id: "bronze_sword", name: "Bronze Sword", stack: false, slot: "weapon", atk: 3, desc: "A short bronze blade.", sell: 18 },
   iron_sword: { id: "iron_sword", name: "Iron Sword", stack: false, slot: "weapon", atk: 6, desc: "A sturdy iron blade.", sell: 45 },
   jade_sword: { id: "jade_sword", name: "Jade Sword", stack: false, slot: "weapon", atk: 10, desc: "A gleaming jade blade.", sell: 95 },
@@ -105,9 +114,9 @@ const SHOP = [
 ];
 
 const PREMIUM_SHOP = [
-  { id: "gold_nametag", name: "Golden Nametag", priceToken: 50, desc: "Your name draws in gold for everyone. Planned companion-token item." },
-  { id: "shrine_pet", name: "Shrine Pet (cosmetic)", priceToken: 150, desc: "A tiny maneki follower. Planned companion-token item." },
-  { id: "premium_cape", name: "Premium Cape", priceToken: 100, desc: "A ceremonial cape. Planned companion-token item." },
+  { id: "gold_nametag", name: "Golden Nametag", priceToken: 50, desc: "Your name draws in gold for everyone. Planned $nihala holder cosmetic (not for sale)." },
+  { id: "shrine_pet", name: "Shrine Pet (cosmetic)", priceToken: 150, desc: "A tiny maneki follower. Planned $nihala holder cosmetic (not for sale)." },
+  { id: "premium_cape", name: "Premium Cape", priceToken: 100, desc: "A ceremonial cape. Planned $nihala holder cosmetic (not for sale)." },
 ];
 
 const MIHAO_MINT = "4CxjZyMNoF1p6eXHXHv1TWpS2X47CuUmLwtGe18spump";

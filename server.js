@@ -27,6 +27,7 @@ const AVATAR_DIR = path.join(DATA_DIR, "avatars");
 const MAX_AVATAR_BYTES = 60 * 1024;
 const AVATAR_DIM = 128;
 const AVATAR_UPLOAD_COOLDOWN_MS = 30000;
+const RENAME_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const ADMIN_KEY = (process.env.ADMIN_KEY || "").trim();
 const PUBLIC_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const COMPANION_MINT = (process.env.COMPANION_MINT || "").trim(); // TBA until launch
@@ -178,7 +179,10 @@ function verifyWalletSig(pubkey, nonce, signature) {
 function uniqueWalletName(preferred, pub) {
   let base = "";
   if (preferred && !validName(preferred)) base = String(preferred).trim();
-  if (!base) base = "Hao" + String(pub).slice(0, 4);
+  if (!base) {
+    const compact = String(pub).slice(0, 4) + String(pub).slice(-4);
+    base = /^[A-Za-z0-9_]+$/.test(compact) ? compact : ("Hao" + String(pub).slice(0, 4));
+  }
   base = base.replace(/[^A-Za-z0-9_]/g, "").slice(0, 12) || "HaoFriend";
   if (!persist.nameTaken(base)) return base;
   for (let i = 1; i < 1000; i++) {
@@ -311,6 +315,7 @@ function hydrateAccount(a) {
   a.biggestFish = Math.max(0, Number(a.biggestFish) || 0);
   a.kills = Math.max(0, a.kills | 0);
   a.periods = leaderboard.normalizePeriods(a.periods);
+  a.lastRenamedAt = Math.max(0, Number(a.lastRenamedAt) || 0);
   return a;
 }
 
@@ -331,6 +336,7 @@ function createAccount({ name, avatar, wallet }) {
     biggestFish: 0,
     kills: 0,
     periods: leaderboard.normalizePeriods(null),
+    lastRenamedAt: 0,
     created: Date.now(),
   }));
 }
@@ -364,6 +370,7 @@ function snapshot(s) {
     biggestFish: a.biggestFish || 0,
     kills: a.kills || 0,
     periods: a.periods || leaderboard.normalizePeriods(null),
+    lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0),
     created: a.created,
   };
 }
@@ -372,17 +379,105 @@ function randToken() {
   return crypto.randomBytes(24).toString("hex");
 }
 
+function normalizeNameKey(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const EXTRA_RESERVED_NAMES = [
+  "system", "admin", "administrator", "moderator", "mod", "gm", "npc",
+  "nihao", "nihaolands", "server",
+];
+
+let reservedNameKeys = null;
+function reservedKeys() {
+  if (reservedNameKeys) return reservedNameKeys;
+  const set = new Set(EXTRA_RESERVED_NAMES);
+  for (const n of staticWorld.npcs || []) set.add(normalizeNameKey(n.name));
+  for (const m of staticWorld.mobs || []) set.add(normalizeNameKey(m.name));
+  reservedNameKeys = set;
+  return set;
+}
+
+function isReservedName(name) {
+  const key = normalizeNameKey(name);
+  return !!key && reservedKeys().has(key);
+}
+
 function validName(name) {
   if (typeof name !== "string") return "Pick a name.";
   const n = name.trim();
   if (n.length < 2 || n.length > 16) return "Name must be 2–16 characters.";
   if (!/^[A-Za-z0-9_]+$/.test(n)) return "Name can only use letters, numbers, and underscores.";
   if (isProfane(n)) return "That name isn't allowed.";
+  if (isReservedName(n)) return "That name is reserved.";
   return null;
 }
 
 function nameTaken(name, exceptId) {
   return persist.nameTaken(name, exceptId);
+}
+
+function isDefaultWalletName(account) {
+  if (!account || !account.wallet) return false;
+  const name = String(account.name || "");
+  const pub = String(account.wallet);
+  const short = shortWallet(pub);
+  const compact = pub.slice(0, 4) + pub.slice(-4);
+  const hao = "Hao" + pub.slice(0, 4);
+  return name === short || name === compact || name === hao;
+}
+
+function needsNamePick(account) {
+  return !!(account && account.wallet && !account.lastRenamedAt && isDefaultWalletName(account));
+}
+
+function nextRenameAt(account) {
+  const last = account ? (Number(account.lastRenamedAt) || 0) : 0;
+  return last ? last + RENAME_COOLDOWN_MS : 0;
+}
+
+function renameCooldownMs(account) {
+  if (!account) return RENAME_COOLDOWN_MS;
+  if (needsNamePick(account)) return 0;
+  const last = Number(account.lastRenamedAt) || 0;
+  if (!last) return 0;
+  return Math.max(0, last + RENAME_COOLDOWN_MS - Date.now());
+}
+
+function applyRename(account, rawName) {
+  const err = validName(rawName || "");
+  if (err) return { error: err, status: 400 };
+  const name = String(rawName).trim();
+  if (name === account.name) return { error: "That's already your name.", status: 400 };
+  if (nameTaken(name, account.id)) return { error: "That name is already in this world.", status: 409 };
+  const wait = renameCooldownMs(account);
+  if (wait > 0) {
+    const hours = Math.max(1, Math.ceil(wait / 3600000));
+    return {
+      error: "You can change your name again in " + hours + " hour" + (hours === 1 ? "" : "s") + ".",
+      status: 429,
+      nextRenameAt: nextRenameAt(account),
+    };
+  }
+  const oldName = account.name;
+  account.name = name;
+  account.lastRenamedAt = Date.now();
+  persist.upsertAccount(account);
+  persist.markDirty();
+  leaderboard.invalidateCache();
+  return { ok: true, oldName, name, nextRenameAt: nextRenameAt(account) };
+}
+
+function finishRename(account, result) {
+  for (const s of sessions.values()) {
+    if (s.account && s.account.id === account.id) {
+      send(s.ws, { type: "renamed", oldName: result.oldName, name: result.name, me: mePayload(s) });
+      toast(s, "You are now known as " + result.name + ".");
+    }
+  }
+  systemChat(result.oldName + " is now known as " + result.name + ".");
+  broadcastState();
+  saveAccounts();
 }
 
 function isProfane(text) {
@@ -472,6 +567,8 @@ function mePayload(s) {
     inventory: s.account.inventory,
     bank: s.account.bank,
     equipped: s.account.equipped,
+    needsName: needsNamePick(s.account),
+    nextRenameAt: nextRenameAt(s.account) || null,
   };
 }
 
@@ -967,6 +1064,12 @@ function onMessage(ws, raw) {
     case "premiumBuy":
       toast(s, "Token purchases are not enabled. This is a design stub only.");
       break;
+    case "rename": {
+      const result = applyRename(s.account, msg.name);
+      if (result.error) { send(s.ws, { type: "error", text: result.error }); break; }
+      finishRename(s.account, result);
+      break;
+    }
     default:
       break;
   }
@@ -1140,6 +1243,8 @@ app.get("/api/account", (req, res) => {
     avatar: resolveAvatar(account.avatar),
     wallet: account.wallet || null,
     walletLabel: shortWallet(account.wallet),
+    needsName: needsNamePick(account),
+    nextRenameAt: nextRenameAt(account) || null,
   });
 });
 
@@ -1199,6 +1304,7 @@ app.post("/api/auth/wallet", (req, res) => {
     wallet: pubkey,
     walletLabel: shortWallet(pubkey),
     linked,
+    needsName: needsNamePick(account),
     note: "Signature only logged you in. No transaction was created or sent.",
   });
 });
@@ -1237,7 +1343,26 @@ async function handleAvatarUpload(req, res) {
   return res.json({ ok: true, avatar });
 }
 
+app.post("/api/rename", (req, res) => {
+  const token = String(req.body?.token || "");
+  const account = persist.getByToken(token);
+  if (!account) return res.status(401).json({ error: "Sign in first." });
+  const result = applyRename(account, req.body?.name);
+  if (result.error) {
+    return res.status(result.status || 400).json({ error: result.error, nextRenameAt: result.nextRenameAt || null });
+  }
+  finishRename(account, result);
+  return res.json({
+    ok: true,
+    name: result.name,
+    oldName: result.oldName,
+    nextRenameAt: result.nextRenameAt,
+    needsName: false,
+  });
+});
+
 app.post("/api/report-avatar", (req, res) => {
+
   const token = String(req.body?.token || "");
   const reporter = persist.getByToken(token);
   if (!reporter) return res.status(401).json({ error: "Sign in first." });

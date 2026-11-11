@@ -63,6 +63,19 @@
     </div>
 
     <aside class="panel">
+      <div class="profile-bar">
+        <span id="profile-name"></span>
+        <button type="button" id="change-name-btn">Change name</button>
+      </div>
+      <div id="rename-box" hidden>
+        <div class="rename-row">
+          <input id="rename-input" maxlength="16" placeholder="New name" autocomplete="off" />
+          <button type="button" id="rename-save">Save</button>
+          <button type="button" id="rename-cancel">Cancel</button>
+        </div>
+        <p class="fine" id="rename-hint"></p>
+        <p class="error" id="rename-error" hidden></p>
+      </div>
       <div class="tabs">
         <button data-tab="skills" class="on">Skills</button>
         <button data-tab="inv">Inventory</button>
@@ -115,6 +128,19 @@
       · <a href="https://dexscreener.com/solana/ho1asg6wgh1ffxdehrk2f4ggt1hoxo9s5jclmdqeyebz" target="_blank" rel="noopener">DexScreener chart</a>
       · Companion token CA: <span id="companion-ca" class="placeholder"><!-- COMPANION_TOKEN_CA_PLACEHOLDER -->TBA — paste address here after launch</span>
     </footer>
+  </div>
+
+  <div id="name-prompt" hidden>
+    <div class="modal-card">
+      <h2>Pick your adventurer name</h2>
+      <p>Your wallet signed in with a short label. Choose a name the village will know you by.</p>
+      <input id="name-prompt-input" maxlength="16" placeholder="e.g. HaoFriend" autocomplete="off" />
+      <div class="rename-row">
+        <button type="button" id="name-prompt-save">Save name</button>
+        <button type="button" id="name-prompt-later">Later</button>
+      </div>
+      <p class="error" id="name-prompt-error" hidden></p>
+    </div>
   </div>
 
   <script src="/game.js"></script>

@@ -285,6 +285,7 @@ function ingestAccount(p) {
     biggestFish: Math.max(0, Number((p.stats && p.stats.biggestFish) ?? p.biggestFish) || 0),
     kills: Math.max(0, ((p.stats && p.stats.kills) ?? p.kills) | 0),
     periods: p.periods || (p.stats && p.stats.periods) || null,
+    lastRenamedAt: Math.max(0, Number(p.lastRenamedAt ?? (p.stats && p.stats.lastRenamedAt) ?? 0) || 0),
     created: p.created || Date.now(),
   };
   accountsById.set(account.id, account);
@@ -352,6 +353,7 @@ async function loadFromPostgres() {
       biggestFish: row.stats && row.stats.biggestFish,
       kills: row.stats && row.stats.kills,
       periods: row.stats && row.stats.periods,
+      lastRenamedAt: row.stats && row.stats.lastRenamedAt,
       created: Number(row.created) || Date.now(),
     });
   }
@@ -442,7 +444,7 @@ async function saveToPostgres() {
           a.id, a.wallet || null, a.name, a.avatar, a.x, a.y, a.gold, a.hp,
           JSON.stringify(a.skills || {}), JSON.stringify(a.inventory || []),
           JSON.stringify(a.bank || {}), JSON.stringify(a.equipped || {}),
-          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0), periods: a.periods || null }),
+          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0), periods: a.periods || null, lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0) }),
           a.created || Date.now(), Date.now(),
         ]
       );

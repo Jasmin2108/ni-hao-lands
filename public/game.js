@@ -219,7 +219,10 @@
       try {
         const acc = await fetch("/api/account?token=" + encodeURIComponent(saved)).then((r) => r.ok ? r.json() : null);
         if (acc) {
-          if (acc.name && !$("name").value) $("name").value = acc.name;
+          if (acc.name) {
+            $("name").value = acc.name;
+            localStorage.setItem("nhl-name", acc.name);
+          }
           if (acc.avatar) {
             state.avatar = acc.avatar;
             if (String(acc.avatar).startsWith("u:")) {
@@ -280,6 +283,7 @@
         resize();
         maybeUploadPending();
         maybeHolderCheck();
+        maybeNamePrompt();
         break;
       case "state":
         state.players = msg.players || [];
@@ -298,6 +302,16 @@
         break;
       case "me":
         state.me = Object.assign(state.me || {}, msg.me);
+        rememberName(state.me && state.me.name);
+        refreshHud();
+        refreshTabs();
+        break;
+      case "renamed":
+        if (msg.me) state.me = Object.assign(state.me || {}, msg.me);
+        else if (state.me && msg.name) state.me.name = msg.name;
+        rememberName(msg.name || (state.me && state.me.name));
+        closeRenameBox();
+        hideNamePrompt();
         refreshHud();
         refreshTabs();
         break;
@@ -324,6 +338,8 @@
     const me = state.me;
     if (!me) return;
     $("player-name").textContent = me.name || "";
+    const pn = $("profile-name");
+    if (pn) pn.textContent = me.name || "";
     $("gold").textContent = (me.gold | 0) + " gold";
     $("hp").textContent = me.hp | 0;
     $("holder-badge").hidden = !me.holder;
@@ -1141,6 +1157,150 @@
   $("name").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("enter").click();
   });
+
+  function rememberName(name) {
+    if (!name) return;
+    localStorage.setItem("nhl-name", name);
+    if ($("name")) $("name").value = name;
+    if (state.me) state.me.name = name;
+    if ($("player-name")) $("player-name").textContent = name;
+    if ($("profile-name")) $("profile-name").textContent = name;
+  }
+
+  function renameHintText(me) {
+    if (!me) return "You can change your name once every 24 hours.";
+    if (me.needsName) return "Your first name change is free because this character still uses a wallet label.";
+    if (me.nextRenameAt && me.nextRenameAt > Date.now()) {
+      const hours = Math.max(1, Math.ceil((me.nextRenameAt - Date.now()) / 3600000));
+      return "You can change your name again in about " + hours + " hour" + (hours === 1 ? "" : "s") + ".";
+    }
+    return "You can change your name once every 24 hours.";
+  }
+
+  function showRenameError(id, text) {
+    const el = $(id);
+    if (!el) return;
+    el.hidden = !text;
+    el.textContent = text || "";
+  }
+
+  function openRenameBox() {
+    const box = $("rename-box");
+    if (!box) return;
+    box.hidden = false;
+    const input = $("rename-input");
+    if (input) {
+      input.value = (state.me && state.me.name) || "";
+      input.focus();
+      input.select();
+    }
+    const hint = $("rename-hint");
+    if (hint) hint.textContent = renameHintText(state.me);
+    showRenameError("rename-error", "");
+  }
+
+  function closeRenameBox() {
+    const box = $("rename-box");
+    if (box) box.hidden = true;
+    showRenameError("rename-error", "");
+  }
+
+  function hideNamePrompt() {
+    const el = $("name-prompt");
+    if (el) el.hidden = true;
+    showRenameError("name-prompt-error", "");
+  }
+
+  function maybeNamePrompt() {
+    const me = state.me;
+    if (!me || !me.needsName || state.namePrompted) return;
+    state.namePrompted = true;
+    const el = $("name-prompt");
+    if (!el) return;
+    el.hidden = false;
+    const input = $("name-prompt-input");
+    if (input) {
+      input.value = "";
+      input.focus();
+    }
+    showRenameError("name-prompt-error", "");
+  }
+
+  async function submitRename(name, errorId) {
+    const trimmed = String(name || "").trim();
+    const token = (state.me && state.me.token) || localStorage.getItem("nhl-token");
+    if (!trimmed) {
+      showRenameError(errorId, "Pick a name.");
+      return false;
+    }
+    if (!token) {
+      showRenameError(errorId, "Sign in first.");
+      return false;
+    }
+    showRenameError(errorId, "");
+    // Prefer the HTTP API so a rename still works if the socket blips; also notify via ws when connected.
+    try {
+      const r = await fetch("/api/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, name: trimmed }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showRenameError(errorId, j.error || "Couldn't change that name.");
+        return false;
+      }
+      rememberName(j.name || trimmed);
+      if (state.me) {
+        state.me.needsName = false;
+        if (j.nextRenameAt) state.me.nextRenameAt = j.nextRenameAt;
+      }
+      closeRenameBox();
+      hideNamePrompt();
+      refreshHud();
+      return true;
+    } catch {
+      if (state.ws && state.ws.readyState === 1) {
+        send({ type: "rename", name: trimmed });
+        return true;
+      }
+      showRenameError(errorId, "Couldn't change that name.");
+      return false;
+    }
+  }
+
+  if ($("change-name-btn")) {
+    $("change-name-btn").addEventListener("click", () => {
+      const box = $("rename-box");
+      if (box && !box.hidden) closeRenameBox();
+      else openRenameBox();
+    });
+  }
+  if ($("rename-save")) {
+    $("rename-save").addEventListener("click", () => submitRename($("rename-input").value, "rename-error"));
+  }
+  if ($("rename-cancel")) $("rename-cancel").addEventListener("click", closeRenameBox);
+  if ($("rename-input")) {
+    $("rename-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitRename($("rename-input").value, "rename-error");
+      }
+      if (e.key === "Escape") closeRenameBox();
+    });
+  }
+  if ($("name-prompt-save")) {
+    $("name-prompt-save").addEventListener("click", () => submitRename($("name-prompt-input").value, "name-prompt-error"));
+  }
+  if ($("name-prompt-later")) $("name-prompt-later").addEventListener("click", hideNamePrompt);
+  if ($("name-prompt-input")) {
+    $("name-prompt-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitRename($("name-prompt-input").value, "name-prompt-error");
+      }
+    });
+  }
 
   $("wallet-signin").addEventListener("click", async () => {
     showLoginError("");

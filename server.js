@@ -17,8 +17,13 @@ const {
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
 const SAVE_FILE = path.join(DATA_DIR, "players.json");
+const AVATAR_DIR = path.join(DATA_DIR, "avatars");
+const MAX_AVATAR_BYTES = 60 * 1024;
+const AVATAR_DIM = 128;
+const AVATAR_UPLOAD_COOLDOWN_MS = 30000;
+const ADMIN_KEY = (process.env.ADMIN_KEY || "").trim();
 const PUBLIC_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const COMPANION_MINT = (process.env.COMPANION_MINT || "").trim(); // TBA until launch
 const COMPANION_TOKEN_PROGRAM = process.env.COMPANION_TOKEN_PROGRAM || "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -38,6 +43,159 @@ const PROFANITY = [
 ];
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(AVATAR_DIR, { recursive: true });
+
+const uploadByToken = new Map();
+const uploadByIp = new Map();
+const reportByToken = new Map();
+
+function pruneRateMap(map, windowMs) {
+  const now = Date.now();
+  if (map.size < 800) return;
+  for (const [k, t] of map) {
+    if (now - t > windowMs * 2) map.delete(k);
+  }
+}
+
+function hitRateLimit(map, key, windowMs) {
+  const now = Date.now();
+  const last = map.get(key) || 0;
+  if (now - last < windowMs) return true;
+  map.set(key, now);
+  pruneRateMap(map, windowMs);
+  return false;
+}
+
+function wouldHitRateLimit(map, key, windowMs) {
+  const last = map.get(key) || 0;
+  return Date.now() - last < windowMs;
+}
+
+function hitWindow(map, key, windowMs, maxHits) {
+  const now = Date.now();
+  const list = (map.get(key) || []).filter((t) => now - t < windowMs);
+  if (list.length >= maxHits) {
+    map.set(key, list);
+    return true;
+  }
+  list.push(now);
+  map.set(key, list);
+  return false;
+}
+
+function clientIp(req) {
+  return String(req.ip || req.socket?.remoteAddress || "unknown");
+}
+
+function isCustomAvatarId(id) {
+  return typeof id === "string" && /^[a-f0-9]{16,32}$/.test(id);
+}
+
+function customAvatarFile(id) {
+  if (!isCustomAvatarId(id)) return null;
+  for (const ext of [".png", ".webp"]) {
+    const file = path.join(AVATAR_DIR, id + ext);
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+function isAllowedAvatar(id) {
+  if (AVATARS.some((a) => a.id === id)) return true;
+  if (typeof id === "string" && id.startsWith("u:")) {
+    return !!customAvatarFile(id.slice(2));
+  }
+  return false;
+}
+
+function resolveAvatar(id) {
+  return isAllowedAvatar(id) ? id : "classic-paw";
+}
+
+function deleteCustomAvatar(avatar) {
+  if (typeof avatar !== "string" || !avatar.startsWith("u:")) return;
+  const id = avatar.slice(2);
+  if (!isCustomAvatarId(id)) return;
+  for (const ext of [".png", ".webp"]) {
+    const file = path.join(AVATAR_DIR, id + ext);
+    if (fs.existsSync(file)) {
+      try { fs.unlinkSync(file); } catch (e) { console.error("[avatar] delete failed", e.message); }
+    }
+  }
+}
+
+function pngSize(buf) {
+  if (!buf || buf.length < 24) return null;
+  if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) return null;
+  if (buf[4] !== 0x0d || buf[5] !== 0x0a || buf[6] !== 0x1a || buf[7] !== 0x0a) return null;
+  if (buf.toString("ascii", 12, 16) !== "IHDR") return null;
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+function webpSize(buf) {
+  if (!buf || buf.length < 30) return null;
+  if (buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WEBP") return null;
+  const fourcc = buf.toString("ascii", 12, 16);
+  if (fourcc === "VP8X") {
+    const width = 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16));
+    const height = 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16));
+    return { width, height };
+  }
+  if (fourcc === "VP8L") {
+    if (buf[20] !== 0x2f) return null;
+    const bits = buf[21] | (buf[22] << 8) | (buf[23] << 16) | (buf[24] << 24);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  if (fourcc === "VP8 ") {
+    const end = Math.min(buf.length - 7, 48);
+    for (let i = 20; i <= end; i++) {
+      if (buf[i] === 0x9d && buf[i + 1] === 0x01 && buf[i + 2] === 0x2a) {
+        return {
+          width: buf[i + 3] | ((buf[i + 4] & 0x3f) << 8),
+          height: buf[i + 5] | ((buf[i + 6] & 0x3f) << 8),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function parseAvatarDataUrl(image) {
+  if (typeof image !== "string" || image.length > 160000) return { error: "Picture is missing or too large." };
+  const m = /^data:image\/(png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image);
+  if (!m) return { error: "Upload a PNG or WebP picture." };
+  let buf;
+  try { buf = Buffer.from(m[2], "base64"); } catch { return { error: "Picture could not be read." }; }
+  if (!buf.length) return { error: "Picture could not be read." };
+  if (buf.length > MAX_AVATAR_BYTES) return { error: "Picture must be 60KB or smaller." };
+  const kind = m[1];
+  const size = kind === "png" ? pngSize(buf) : webpSize(buf);
+  if (!size) return { error: "That file is not a valid " + kind.toUpperCase() + " picture." };
+  if (size.width !== AVATAR_DIM || size.height !== AVATAR_DIM) {
+    return { error: "Picture must be 128×128." };
+  }
+  return { kind, buf };
+}
+
+function adminKeyOk(given) {
+  if (!ADMIN_KEY || typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(ADMIN_KEY);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function applyAvatar(account, avatar, persist) {
+  account.avatar = avatar;
+  for (const s of sessions.values()) {
+    if (s.account.token === account.token) {
+      s.account.avatar = avatar;
+      send(s.ws, { type: "me", me: mePayload(s) });
+    }
+  }
+  if (persist) saveAccounts();
+  broadcastState();
+}
 
 const staticWorld = buildWorld();
 const tiles = staticWorld.tiles;
@@ -80,7 +238,7 @@ function sanitizeAccount(p) {
   return {
     token: String(p.token),
     name: String(p.name).slice(0, 16),
-    avatar: AVATARS.some((a) => a.id === p.avatar) ? p.avatar : "classic-paw",
+    avatar: resolveAvatar(p.avatar),
     x: Number.isFinite(p.x) ? p.x : staticWorld.spawn.x,
     y: Number.isFinite(p.y) ? p.y : staticWorld.spawn.y,
     gold: Math.max(0, p.gold | 0),
@@ -610,13 +768,15 @@ function onHello(ws, msg) {
   let account = null;
   if (msg.token && accounts.has(String(msg.token))) {
     account = accounts.get(String(msg.token));
-    if (msg.avatar && AVATARS.some((a) => a.id === msg.avatar)) account.avatar = msg.avatar;
+    // Only change a returning player's avatar when the client explicitly sent a valid one
+    // (the login screen leaves this off unless the player picked a new preset).
+    if (msg.avatar && isAllowedAvatar(msg.avatar)) account.avatar = msg.avatar;
   } else {
     const err = validName(msg.name || "");
     if (err) { send(ws, { type: "error", text: err }); return; }
     const name = String(msg.name).trim();
     if (nameTaken(name)) { send(ws, { type: "error", text: "That name is already in this world." }); return; }
-    const avatar = AVATARS.some((a) => a.id === msg.avatar) ? msg.avatar : "classic-paw";
+    const avatar = isAllowedAvatar(msg.avatar) ? msg.avatar : "classic-paw";
     account = {
       token: randToken(),
       name,
@@ -817,9 +977,22 @@ function tick(dt, now) {
 // --- HTTP + WS ---
 const app = express();
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.post("/api/avatar", express.json({ limit: "120kb" }), handleAvatarUpload);
 app.use(express.json({ limit: "32kb" }));
 app.use("/assets", express.static(path.join(__dirname, "assets"), { maxAge: "1h" }));
 app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/avatars/:id", (req, res) => {
+  const id = String(req.params.id || "");
+  const file = customAvatarFile(id);
+  if (!file) return res.status(404).end();
+  const type = file.endsWith(".webp") ? "image/webp" : "image/png";
+  res.setHeader("Content-Type", type);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+  res.sendFile(file);
+});
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, players: sessions.size, accounts: accounts.size, uptime: process.uptime() });
@@ -834,6 +1007,86 @@ app.get("/api/config", (_req, res) => {
     avatars: AVATARS,
     purchasesEnabled: false,
   });
+});
+
+app.get("/api/account", (req, res) => {
+  const token = String(req.query.token || "");
+  const account = accounts.get(token);
+  if (!account) return res.status(404).json({ error: "Unknown account" });
+  res.json({ name: account.name, avatar: resolveAvatar(account.avatar) });
+});
+
+function handleAvatarUpload(req, res) {
+  const ip = clientIp(req);
+  // Count every attempt per IP (success or not) so a flood still gets a 429.
+  // Token cooldown starts only after a successful save, so a bad file can be retried.
+  if (hitWindow(uploadByIp, ip, AVATAR_UPLOAD_COOLDOWN_MS, 10)) {
+    return res.status(429).json({ error: "Please wait a little before uploading again." });
+  }
+  const token = String(req.body?.token || "");
+  const account = accounts.get(token);
+  if (!account) return res.status(401).json({ error: "Join the world once before uploading a picture." });
+  if (wouldHitRateLimit(uploadByToken, token, AVATAR_UPLOAD_COOLDOWN_MS)) {
+    return res.status(429).json({ error: "Please wait a little before uploading again." });
+  }
+
+  const parsed = parseAvatarDataUrl(req.body?.image);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+  const id = crypto.randomBytes(12).toString("hex");
+  const ext = parsed.kind === "webp" ? ".webp" : ".png";
+  const dest = path.join(AVATAR_DIR, id + ext);
+  try {
+    fs.writeFileSync(dest, parsed.buf);
+  } catch (e) {
+    console.error("[avatar] write failed", e.message);
+    return res.status(500).json({ error: "Could not save that picture." });
+  }
+
+  hitRateLimit(uploadByToken, token, AVATAR_UPLOAD_COOLDOWN_MS);
+  const previous = account.avatar;
+  const avatar = "u:" + id;
+  applyAvatar(account, avatar, true);
+  if (previous && previous !== avatar) deleteCustomAvatar(previous);
+  return res.json({ ok: true, avatar });
+}
+
+app.post("/api/report-avatar", (req, res) => {
+  const token = String(req.body?.token || "");
+  const reporter = accounts.get(token);
+  if (!reporter) return res.status(401).json({ error: "Sign in first." });
+  if (hitRateLimit(reportByToken, token, 15000)) {
+    return res.status(429).json({ error: "Please wait a little before reporting again." });
+  }
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Missing player name." });
+  let target = null;
+  for (const a of accounts.values()) {
+    if (a.name.toLowerCase() === name.toLowerCase()) { target = a; break; }
+  }
+  if (!target) return res.status(404).json({ error: "No player with that name." });
+  if (typeof target.avatar !== "string" || !target.avatar.startsWith("u:")) {
+    return res.status(400).json({ error: "That player is using a built-in picture." });
+  }
+  console.warn("[report] %s reported %s avatar %s", reporter.name, target.name, target.avatar);
+  return res.json({ ok: true, text: "Thanks. An admin can remove that picture." });
+});
+
+app.post("/api/admin/reset-avatar", (req, res) => {
+  if (!adminKeyOk(req.body?.adminKey)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Missing player name." });
+  let target = null;
+  for (const a of accounts.values()) {
+    if (a.name.toLowerCase() === name.toLowerCase()) { target = a; break; }
+  }
+  if (!target) return res.status(404).json({ error: "No player with that name." });
+  const previous = target.avatar;
+  applyAvatar(target, "classic-paw", true);
+  deleteCustomAvatar(previous);
+  return res.json({ ok: true, name: target.name, avatar: "classic-paw" });
 });
 
 // Read-only holder check. No keys, no transactions.

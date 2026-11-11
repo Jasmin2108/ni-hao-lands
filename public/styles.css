@@ -50,12 +50,19 @@ h1 { font-size: 42px; margin: 8px 0 6px; color: #fff6d8; text-shadow: 0 2px 0 #6
 }
 .avatar-grid button.on, .avatar-grid button:hover { border-color: var(--gold); }
 .avatar-grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
-#enter, #chat-form button, .tab button.buy, #connect-wallet, .item-btn {
+#enter, #chat-form button, .tab button.buy, #connect-wallet, .item-btn, #upload-avatar-btn, #report-picture {
   background: linear-gradient(#c44a32, #8c2c1c); color: #fff6d8; border: 1px solid #f0c96a;
   padding: 10px 18px; cursor: pointer; font-weight: 600;
 }
 #enter { width: 100%; font-size: 18px; }
-#enter:hover, #chat-form button:hover, #connect-wallet:hover { filter: brightness(1.08); }
+#enter:hover, #chat-form button:hover, #connect-wallet:hover, #upload-avatar-btn:hover, #report-picture:hover { filter: brightness(1.08); }
+.upload-row { text-align: left; margin: -8px 0 16px; }
+#upload-avatar-btn { width: auto; padding: 7px 12px; font-size: 13px; }
+.upload-note { margin: 8px 0 0; }
+.avatar-grid button.custom { border-style: dashed; }
+#examine { display: flex; flex-direction: column; gap: 6px; }
+#examine[hidden] { display: none !important; }
+#report-picture { padding: 4px 8px; font-size: 11px; width: fit-content; }
 .error { color: #ffb4a8; margin: 10px 0 0; }
 .fine { font-size: 12px; color: #cbb894; margin: 12px 0 0; line-height: 1.4; }
 

@@ -16,8 +16,13 @@
       <label>Adventurer name
         <input id="name" maxlength="16" placeholder="e.g. HaoFriend" autocomplete="off" />
       </label>
-      <p class="pick-label">Pick a Meme Depot PFP</p>
+      <p class="pick-label">Pick a Meme Depot PFP or upload your own</p>
       <div id="avatar-grid" class="avatar-grid"></div>
+      <div class="upload-row">
+        <button id="upload-avatar-btn" type="button">Upload your own</button>
+        <input id="upload-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        <p class="fine upload-note">Keep it mihao and keep it clean. Offensive pictures get removed.</p>
+      </div>
       <button id="enter" type="button">Enter world</button>
       <p id="login-error" class="error" hidden></p>
       <p class="fine">Returning? Your last name is restored automatically if this browser has a token.</p>
@@ -42,7 +47,10 @@
       <canvas id="view"></canvas>
       <div id="minimap-wrap"><canvas id="minimap" width="160" height="120"></canvas></div>
       <div id="toasts"></div>
-      <div id="examine" hidden></div>
+      <div id="examine" hidden>
+        <span id="examine-text"></span>
+        <button type="button" id="report-picture" hidden>Report picture</button>
+      </div>
       <div id="action-label" hidden></div>
     </div>
 

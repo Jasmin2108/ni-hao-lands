@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test:clients": "node test-two-clients.mjs"
+    "test:clients": "node test-two-clients.mjs",
+    "test:avatar": "node test-avatar-upload.mjs"
   },
   "engines": {
     "node": ">=18"

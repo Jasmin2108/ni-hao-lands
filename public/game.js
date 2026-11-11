@@ -24,6 +24,10 @@
     lastState: 0,
     tab: "skills",
     avatar: "classic-paw",
+    avatarTouched: false,
+    pendingUpload: null,
+    customPreview: null,
+    loadingImages: {},
     mihaoMint: "4CxjZyMNoF1p6eXHXHv1TWpS2X47CuUmLwtGe18spump",
     companionMint: null,
     wallet: null,
@@ -63,6 +67,43 @@
     el.textContent = text || "";
   }
 
+  function selectAvatarButton(btn) {
+    const grid = $("avatar-grid");
+    grid.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === btn));
+  }
+
+  function renderCustomSlot() {
+    const grid = $("avatar-grid");
+    let b = grid.querySelector("button.custom");
+    const src = state.customPreview;
+    if (!src) {
+      if (b) b.remove();
+      return;
+    }
+    if (!b) {
+      b = document.createElement("button");
+      b.type = "button";
+      b.className = "custom";
+      b.title = "Your picture";
+      const img = document.createElement("img");
+      img.alt = "Your picture";
+      b.appendChild(img);
+      b.addEventListener("click", () => {
+        if (state.pendingUpload) {
+          state.avatarTouched = false;
+        } else if (state.avatar && String(state.avatar).startsWith("u:")) {
+          state.avatarTouched = false;
+        }
+        selectAvatarButton(b);
+      });
+      grid.appendChild(b);
+    }
+    b.querySelector("img").src = src;
+    if (state.pendingUpload || (state.avatar && String(state.avatar).startsWith("u:"))) {
+      selectAvatarButton(b);
+    }
+  }
+
   function renderAvatarGrid(avatars) {
     const grid = $("avatar-grid");
     grid.innerHTML = "";
@@ -77,11 +118,82 @@
       b.appendChild(img);
       b.addEventListener("click", () => {
         state.avatar = a.id;
-        grid.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+        state.avatarTouched = true;
+        state.pendingUpload = null;
+        selectAvatarButton(b);
       });
       grid.appendChild(b);
       if (i === 0 && !state.avatar) state.avatar = a.id;
     });
+    renderCustomSlot();
+  }
+
+  function dataUrlBytes(url) {
+    const i = url.indexOf(",") + 1;
+    return Math.floor(((url.length - i) * 3) / 4);
+  }
+
+  function encodeAvatarCanvas(canvas) {
+    for (const q of [0.92, 0.8, 0.65, 0.5]) {
+      const webp = canvas.toDataURL("image/webp", q);
+      if (webp.startsWith("data:image/webp") && dataUrlBytes(webp) <= 60 * 1024) return webp;
+    }
+    const png = canvas.toDataURL("image/png");
+    if (dataUrlBytes(png) <= 60 * 1024) return png;
+    throw new Error("Picture is still too large after shrinking. Try a simpler image.");
+  }
+
+  function loadFileImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that image.")); };
+      img.src = url;
+    });
+  }
+
+  async function cropToAvatar(file) {
+    const img = await loadFileImage(file);
+    const size = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
+    if (!size) throw new Error("Couldn't read that image.");
+    const sx = ((img.naturalWidth || img.width) - size) / 2;
+    const sy = ((img.naturalHeight || img.height) - size) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 128;
+    const c = canvas.getContext("2d");
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = "high";
+    c.drawImage(img, sx, sy, size, size, 0, 0, 128, 128);
+    return encodeAvatarCanvas(canvas);
+  }
+
+  async function uploadAvatar(image, token) {
+    const r = await fetch("/api/avatar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, image }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Couldn't upload picture.");
+    return j.avatar;
+  }
+
+  async function maybeUploadPending() {
+    if (!state.pendingUpload || !state.me || !state.me.token) return;
+    const image = state.pendingUpload;
+    state.pendingUpload = null;
+    try {
+      const avatar = await uploadAvatar(image, state.me.token);
+      state.me.avatar = avatar;
+      state.avatar = avatar;
+      state.customPreview = image;
+      renderCustomSlot();
+      toast("Your picture is in the world.");
+    } catch (e) {
+      toast(e.message || "Couldn't upload picture.");
+    }
   }
 
   async function bootLogin() {
@@ -97,13 +209,24 @@
       $("companion-ca").textContent = cfg.companionMint;
     }
     await loadAvatars(avatars);
-    renderAvatarGrid(avatars);
     const saved = localStorage.getItem("nhl-token");
     const savedName = localStorage.getItem("nhl-name");
     if (savedName) $("name").value = savedName;
-    if (saved && savedName) {
-      // auto-show the previous name; user still clicks Enter
+    if (saved) {
+      try {
+        const acc = await fetch("/api/account?token=" + encodeURIComponent(saved)).then((r) => r.ok ? r.json() : null);
+        if (acc) {
+          if (acc.name && !$("name").value) $("name").value = acc.name;
+          if (acc.avatar) {
+            state.avatar = acc.avatar;
+            if (String(acc.avatar).startsWith("u:")) {
+              state.customPreview = "/avatars/" + acc.avatar.slice(2);
+            }
+          }
+        }
+      } catch {}
     }
+    renderAvatarGrid(avatars);
   }
 
   function connect(hello) {
@@ -144,6 +267,7 @@
         state.companionMint = msg.companionMint || null;
         if (msg.me.token) localStorage.setItem("nhl-token", msg.me.token);
         if (msg.me.name) localStorage.setItem("nhl-name", msg.me.name);
+        if (msg.me.avatar) state.avatar = msg.me.avatar;
         $("login").hidden = true;
         $("game").hidden = false;
         if (state.companionMint) $("companion-ca").textContent = state.companionMint;
@@ -151,6 +275,7 @@
         refreshHud();
         refreshTabs();
         resize();
+        maybeUploadPending();
         break;
       case "state":
         state.players = msg.players || [];
@@ -357,11 +482,27 @@
     setTimeout(() => d.remove(), 2800);
   }
 
-  function showExamine(text) {
+  let examinePinnedUntil = 0;
+  let examineText = "";
+
+  function showExamine(text, opts) {
     const el = $("examine");
+    const tx = $("examine-text") || el;
+    const report = $("report-picture");
+    examineText = text || "";
     el.hidden = !text;
-    el.textContent = text || "";
-    if (text) setTimeout(() => { if (el.textContent === text) el.hidden = true; }, 5000);
+    tx.textContent = text || "";
+    const showReport = !!(opts && opts.reportName && opts.reportAvatar && String(opts.reportAvatar).startsWith("u:"));
+    if (report) {
+      report.hidden = !showReport;
+      if (showReport) report.dataset.name = opts.reportName;
+      else delete report.dataset.name;
+    }
+    if (opts && opts.pin) examinePinnedUntil = performance.now() + 6000;
+    if (text) {
+      const snap = text;
+      setTimeout(() => { if (examineText === snap && performance.now() >= examinePinnedUntil) el.hidden = true; }, 5000);
+    }
   }
 
   function resize() {
@@ -404,6 +545,7 @@
     state.hover = t;
     if (!t) { showExamine(""); return; }
     const ent = entityAt(t.tx, t.ty);
+    if (performance.now() < examinePinnedUntil) return;
     if (ent) {
       if (ent.kind === "npc") showExamine(ent.e.name + " — " + (ent.e.examine || "Click to talk."));
       else if (ent.kind === "node") showExamine(nodeLabel(ent.e) + (ent.e.depleted ? " (depleted)" : " — click to use"));
@@ -417,7 +559,11 @@
     if (!t) return;
     state.clickFx = { x: t.tx, y: t.ty, t: performance.now() };
     const ent = entityAt(t.tx, t.ty);
-    if (ent && ent.kind !== "player") {
+    if (ent && ent.kind === "player") {
+      showExamine(ent.e.name, { pin: true, reportName: ent.e.name, reportAvatar: ent.e.avatar });
+      return;
+    }
+    if (ent) {
       send({ type: "interact", id: ent.e.id });
     } else {
       send({ type: "move", x: t.tx, y: t.ty });
@@ -584,6 +730,17 @@
   }
 
   function avatarImg(id) {
+    if (id && String(id).startsWith("u:")) {
+      if (state.images[id]) return state.images[id];
+      if (!state.loadingImages[id]) {
+        state.loadingImages[id] = true;
+        const img = new Image();
+        img.onload = () => { state.images[id] = img; };
+        img.onerror = () => { delete state.loadingImages[id]; };
+        img.src = "/avatars/" + encodeURIComponent(String(id).slice(2));
+      }
+      return state.images["classic-paw.jpg"];
+    }
     const a = state.avatars.find((x) => x.id === id);
     return state.images[a ? a.file : (id + ".jpg")] || state.images["classic-paw.jpg"];
   }
@@ -692,9 +849,51 @@
     const name = $("name").value.trim();
     const token = localStorage.getItem("nhl-token");
     const savedName = localStorage.getItem("nhl-name");
-    const hello = { type: "hello", name, avatar: state.avatar };
+    const hello = { type: "hello", name };
     if (token && savedName && savedName === name) hello.token = token;
+    if (state.avatarTouched && state.avatar && !String(state.avatar).startsWith("u:")) {
+      hello.avatar = state.avatar;
+    } else if (!hello.token && state.avatar && !state.pendingUpload) {
+      hello.avatar = state.avatar;
+    }
     connect(hello);
+  });
+
+  $("upload-avatar-btn").addEventListener("click", () => $("upload-avatar-input").click());
+  $("upload-avatar-input").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    showLoginError("");
+    try {
+      const dataUrl = await cropToAvatar(file);
+      state.pendingUpload = dataUrl;
+      state.customPreview = dataUrl;
+      state.avatarTouched = false;
+      renderCustomSlot();
+    } catch (err) {
+      showLoginError(err.message || "Couldn't use that image.");
+    }
+  });
+
+  $("report-picture").addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const name = $("report-picture").dataset.name;
+    const token = (state.me && state.me.token) || localStorage.getItem("nhl-token");
+    if (!name || !token) return;
+    try {
+      const r = await fetch("/api/report-avatar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, name }),
+      });
+      const j = await r.json().catch(() => ({}));
+      toast(j.text || j.error || "Thanks, we logged that report.");
+    } catch {
+      toast("Couldn't send the report.");
+    }
+    $("report-picture").hidden = true;
   });
   $("name").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("enter").click();

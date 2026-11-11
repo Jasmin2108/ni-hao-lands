@@ -78,6 +78,12 @@ function emptySkills() {
   return s;
 }
 
+// Light random catch weight in kg, skewed toward smaller fish (about 0.3–5.0 kg).
+function rollFishKg() {
+  const kg = 0.3 + Math.pow(Math.random(), 1.7) * 4.7;
+  return Math.round(kg * 10) / 10;
+}
+
 function inBounds(x, y) {
   return x >= 0 && y >= 0 && x < W && y < H;
 }
@@ -370,5 +376,5 @@ function buildWorld() {
 module.exports = {
   W, H, AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP,
   MIHAO_MINT, MIHAO_TOKEN_PROGRAM, DEXSCREENER,
-  levelFromXp, xpToNext, emptySkills, inBounds, isWalkable, pathfind, zoneAt, adj, buildWorld, WALK,
+  levelFromXp, xpToNext, emptySkills, rollFishKg, inBounds, isWalkable, pathfind, zoneAt, adj, buildWorld, WALK,
 };

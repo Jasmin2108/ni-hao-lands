@@ -8,7 +8,8 @@
     "start": "node server.js",
     "test:clients": "node test-two-clients.mjs",
     "test:avatar": "node test-avatar-upload.mjs",
-    "test:wallet": "node test-wallet-auth.mjs"
+    "test:wallet": "node test-wallet-auth.mjs",
+    "test:leaderboard": "node test-leaderboard.mjs"
   },
   "engines": {
     "node": ">=18"

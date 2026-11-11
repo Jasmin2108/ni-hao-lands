@@ -246,6 +246,7 @@ async function createTables() {
       inventory JSONB,
       bank JSONB,
       equipped JSONB,
+      stats JSONB,
       created BIGINT,
       updated BIGINT
     );
@@ -262,6 +263,7 @@ async function createTables() {
       created BIGINT
     );
   `);
+  await pool.query("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stats JSONB");
 }
 
 function ingestAccount(p) {
@@ -280,6 +282,8 @@ function ingestAccount(p) {
     inventory: Array.isArray(p.inventory) ? p.inventory : [],
     bank: p.bank && typeof p.bank === "object" ? p.bank : {},
     equipped: p.equipped && typeof p.equipped === "object" ? p.equipped : {},
+    biggestFish: Math.max(0, Number((p.stats && p.stats.biggestFish) ?? p.biggestFish) || 0),
+    kills: Math.max(0, ((p.stats && p.stats.kills) ?? p.kills) | 0),
     created: p.created || Date.now(),
   };
   accountsById.set(account.id, account);
@@ -343,6 +347,9 @@ async function loadFromPostgres() {
       inventory: row.inventory,
       bank: row.bank,
       equipped: row.equipped,
+      stats: row.stats,
+      biggestFish: row.stats && row.stats.biggestFish,
+      kills: row.stats && row.stats.kills,
       created: Number(row.created) || Date.now(),
     });
   }
@@ -412,8 +419,8 @@ async function saveToPostgres() {
     await client.query("BEGIN");
     for (const a of accountsById.values()) {
       await client.query(
-        `INSERT INTO accounts (id, wallet, name, avatar, x, y, gold, hp, skills, inventory, bank, equipped, created, updated)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14)
+        `INSERT INTO accounts (id, wallet, name, avatar, x, y, gold, hp, skills, inventory, bank, equipped, stats, created, updated)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15)
          ON CONFLICT (id) DO UPDATE SET
            wallet = EXCLUDED.wallet,
            name = EXCLUDED.name,
@@ -426,12 +433,14 @@ async function saveToPostgres() {
            inventory = EXCLUDED.inventory,
            bank = EXCLUDED.bank,
            equipped = EXCLUDED.equipped,
+           stats = EXCLUDED.stats,
            created = EXCLUDED.created,
            updated = EXCLUDED.updated`,
         [
           a.id, a.wallet || null, a.name, a.avatar, a.x, a.y, a.gold, a.hp,
           JSON.stringify(a.skills || {}), JSON.stringify(a.inventory || []),
           JSON.stringify(a.bank || {}), JSON.stringify(a.equipped || {}),
+          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0) }),
           a.created || Date.now(), Date.now(),
         ]
       );

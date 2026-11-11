@@ -15,8 +15,9 @@ const world = require("./world");
 const {
   AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP,
   MIHAO_MINT, MIHAO_TOKEN_PROGRAM, DEXSCREENER,
-  levelFromXp, emptySkills, isWalkable, pathfind, zoneAt, adj, buildWorld,
+  levelFromXp, emptySkills, rollFishKg, isWalkable, pathfind, zoneAt, adj, buildWorld,
 } = world;
+const leaderboard = require("./leaderboard");
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -307,6 +308,8 @@ function hydrateAccount(a) {
   if (!Array.isArray(a.inventory)) a.inventory = [];
   if (!a.bank || typeof a.bank !== "object") a.bank = {};
   if (!a.equipped || typeof a.equipped !== "object") a.equipped = {};
+  a.biggestFish = Math.max(0, Number(a.biggestFish) || 0);
+  a.kills = Math.max(0, a.kills | 0);
   return a;
 }
 
@@ -324,6 +327,8 @@ function createAccount({ name, avatar, wallet }) {
     inventory: [{ id: "cooked_fish", qty: 2 }],
     bank: {},
     equipped: {},
+    biggestFish: 0,
+    kills: 0,
     created: Date.now(),
   }));
 }
@@ -354,6 +359,8 @@ function snapshot(s) {
     inventory: a.inventory,
     bank: a.bank,
     equipped: a.equipped,
+    biggestFish: a.biggestFish || 0,
+    kills: a.kills || 0,
     created: a.created,
   };
 }
@@ -611,7 +618,18 @@ function finishGather(s, node) {
   node.depleted = true;
   node.respawnAt = Date.now() + (node.respawn || 15000);
   const item = ITEMS[node.item];
-  toast(s, `You get ${item ? item.name : node.item}.`);
+  let note = `You get ${item ? item.name : node.item}.`;
+  if (node.item === "raw_fish" || node.type === "fish") {
+    const kg = rollFishKg();
+    const prev = Number(s.account.biggestFish) || 0;
+    if (kg > prev) {
+      s.account.biggestFish = kg;
+      note = `You catch a ${kg.toFixed(1)} kg fish — new personal best!`;
+    } else {
+      note = `You catch a ${kg.toFixed(1)} kg fish.`;
+    }
+  }
+  toast(s, note);
   send(s.ws, { type: "me", me: mePayload(s) });
   // auto-repeat if still there and node will respawn later — stop this cycle
   cancelAction(s);
@@ -661,6 +679,7 @@ function combatTick(s, now) {
     mob.hp = 0;
     mob.respawnAt = now + 20000;
     giveXp(s, "combat", 30);
+    s.account.kills = (s.account.kills || 0) + 1;
     const gold = 5 + Math.floor(Math.random() * 11);
     s.account.gold += gold;
     invAdd(s.account.inventory, "bones", 1);
@@ -1067,6 +1086,17 @@ app.get("/avatars/:id", async (req, res) => {
   } catch {
     res.status(404).end();
   }
+});
+
+app.get("/api/leaderboard", (req, res) => {
+  const board = String(req.query.board || "");
+  const limit = req.query.limit;
+  const token = String(req.query.token || "");
+  const viewer = token ? persist.getByToken(token) : null;
+  const payload = leaderboard.getLeaderboard(persist.allAccounts(), { board, limit, viewer });
+  if (payload.error) return res.status(400).json(payload);
+  res.setHeader("Cache-Control", "public, max-age=15");
+  res.json(payload);
 });
 
 app.get("/health", (_req, res) => {

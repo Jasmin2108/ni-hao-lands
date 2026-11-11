@@ -23,6 +23,8 @@
     clickFx: null,
     lastState: 0,
     tab: "skills",
+    ranksBoard: "fishing",
+    ranksTimer: 0,
     avatar: "classic-paw",
     avatarTouched: false,
     pendingUpload: null,
@@ -333,11 +335,137 @@
     } else al.hidden = true;
   }
 
+  const RANK_BOARDS = [
+    { id: "fishing", name: "Fishing" },
+    { id: "yarn", name: "Yarn-gathering" },
+    { id: "mining", name: "Mining" },
+    { id: "cooking", name: "Cooking" },
+    { id: "combat", name: "Combat" },
+    { id: "total", name: "Total level" },
+    { id: "gold", name: "Gold" },
+    { id: "fish", name: "Biggest fish" },
+    { id: "kills", name: "Dogs defeated" },
+  ];
+
+  function avatarSrc(id) {
+    if (id && String(id).startsWith("u:")) return "/avatars/" + encodeURIComponent(String(id).slice(2));
+    const a = state.avatars.find((x) => x.id === id);
+    return "/assets/" + (a ? a.file : "classic-paw.jpg");
+  }
+
+  function fillRanksSelector(boards) {
+    const sel = $("ranks-board");
+    if (!sel) return;
+    const list = boards && boards.length ? boards : RANK_BOARDS;
+    const current = state.ranksBoard || "fishing";
+    const same = sel.dataset.filled === "1" && sel.options.length === list.length;
+    if (!same) {
+      sel.innerHTML = "";
+      for (const b of list) {
+        const opt = document.createElement("option");
+        opt.value = b.id;
+        opt.textContent = b.name;
+        sel.appendChild(opt);
+      }
+      sel.dataset.filled = "1";
+    }
+    if ([...sel.options].some((o) => o.value === current)) sel.value = current;
+  }
+
+  function rankRow(e, mine) {
+    const row = document.createElement("div");
+    row.className = "rank-row" + (mine ? " me" : "");
+    const place = document.createElement("span");
+    place.className = "rank-place";
+    place.textContent = e.rank ? "#" + e.rank : "—";
+    const img = document.createElement("img");
+    img.src = avatarSrc(e.avatar);
+    img.alt = "";
+    const who = document.createElement("div");
+    who.className = "rank-who";
+    who.innerHTML = `<span class="name">${esc(e.name)}</span>` +
+      (e.walletLabel ? `<span class="wallet">${esc(e.walletLabel)}</span>` : "");
+    const val = document.createElement("span");
+    val.className = "rank-val";
+    val.textContent = e.display != null ? e.display : String(e.value);
+    row.appendChild(place);
+    row.appendChild(img);
+    row.appendChild(who);
+    row.appendChild(val);
+    return row;
+  }
+
+  function renderRanks(data) {
+    const list = $("ranks-list");
+    const youBox = $("ranks-you");
+    if (!list) return;
+    if (data && data.boards) fillRanksSelector(data.boards);
+    list.innerHTML = "";
+    const meName = state.me && state.me.name;
+    const entries = (data && data.entries) || [];
+    if (!entries.length) {
+      const p = document.createElement("p");
+      p.className = "fine";
+      p.textContent = "No ranks on this board yet.";
+      list.appendChild(p);
+    }
+    for (const e of entries) {
+      list.appendChild(rankRow(e, !!(meName && e.name === meName)));
+    }
+    if (youBox) {
+      const you = data && data.you;
+      const inTop = !!(you && entries.some((e) => e.name === you.name));
+      if (you && you.rank && !inTop) {
+        youBox.hidden = false;
+        youBox.innerHTML = `<p class="fine">Your rank</p>`;
+        youBox.appendChild(rankRow(you, true));
+      } else if (you && you.unranked) {
+        youBox.hidden = false;
+        youBox.innerHTML = `<p class="fine">You're not on this board yet.</p>`;
+      } else {
+        youBox.hidden = true;
+        youBox.innerHTML = "";
+      }
+    }
+  }
+
+  async function loadRanks() {
+    if (state.tab !== "ranks") return;
+    const board = state.ranksBoard || "fishing";
+    const token = (state.me && state.me.token) || localStorage.getItem("nhl-token") || "";
+    try {
+      const r = await fetch("/api/leaderboard?board=" + encodeURIComponent(board) + "&limit=25" + (token ? "&token=" + encodeURIComponent(token) : ""));
+      const data = await r.json();
+      if (state.tab !== "ranks") return;
+      renderRanks(data);
+    } catch {
+      if (state.tab !== "ranks") return;
+      const list = $("ranks-list");
+      if (list) list.innerHTML = `<p class="fine">Couldn't load ranks. Try again in a moment.</p>`;
+    }
+  }
+
+  function stopRanksRefresh() {
+    if (state.ranksTimer) {
+      clearInterval(state.ranksTimer);
+      state.ranksTimer = 0;
+    }
+  }
+
+  function startRanksRefresh() {
+    stopRanksRefresh();
+    fillRanksSelector();
+    loadRanks();
+    state.ranksTimer = setInterval(loadRanks, 60000);
+  }
+
   function openTab(id) {
     state.tab = id;
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + id));
     refreshTabs();
+    if (id === "ranks") startRanksRefresh();
+    else stopRanksRefresh();
   }
 
   function itemName(id) {
@@ -846,6 +974,14 @@
   document.querySelectorAll(".tabs button").forEach((b) => {
     b.addEventListener("click", () => openTab(b.dataset.tab));
   });
+  const ranksBoard = $("ranks-board");
+  if (ranksBoard) {
+    fillRanksSelector();
+    ranksBoard.addEventListener("change", () => {
+      state.ranksBoard = ranksBoard.value;
+      loadRanks();
+    });
+  }
 
   function bytesToBase64(bytes) {
     let bin = "";

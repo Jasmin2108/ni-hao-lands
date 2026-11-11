@@ -14,6 +14,7 @@ Art for player and NPC avatars comes from the public [mihao pfps Meme Depot](htt
 - Resource nodes deplete and respawn. Raw fish can be cooked at the village range. Cooked fish heals.
 - 28-slot inventory, a bank (Banker Bao, west building), a gold shop (Merchant Mao, east building) for cosmetics.
 - Multiplayer: positions, names, avatars, and a rate-limited global chat (length + basic profanity filter).
+- **Ranks** tab: leaderboards for each skill, total level, gold, biggest fish, and dogs defeated. Fish catches get a light random weight, and each player keeps a personal best. `GET /api/leaderboard?board=fishing&limit=25`.
 - Accounts persist in `data/players.json` (or Postgres when `DATABASE_URL` is set). A random session token is stored in the browser. Guest play (name only) still works on one browser.
 - **Sign in with a Solana wallet** (Phantom, Solflare, Backpack, or any injected `window.solana`-compatible wallet). The game only calls `signMessage` on a login text — it never calls `signTransaction` and never sends a transaction. The same wallet on another device loads the same character. A guest can link their current character to a wallet that does not have a character yet. Wallet sessions last 30 days, then you sign the login message again. If no wallet is injected (typical on mobile), the login screen offers Open in Phantom / Open in Solflare deep links.
 - Players can upload their own 128×128 picture from the login screen (cropped and resized in the browser). Keep it mihao and keep it clean — offensive pictures get removed. Click another player's custom picture in the world to report it.
@@ -43,6 +44,7 @@ Avatar upload test (starts its own server if you pass nothing; or pass a base UR
 ```bash
 node test-avatar-upload.mjs
 node test-wallet-auth.mjs
+node test-leaderboard.mjs
 ```
 
 Health check: `GET /health`.

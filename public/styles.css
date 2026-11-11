@@ -152,9 +152,29 @@ footer .ca, .placeholder {
 }
 .placeholder { cursor: default; text-decoration: none; color: #e8c56a; }
 
+.ranks-label { display: block; color: var(--gold); font-size: 12px; margin-bottom: 8px; }
+#ranks-board {
+  display: block; width: 100%; margin-top: 4px; padding: 6px 8px;
+  background: #1a120c; color: var(--cream); border: 1px solid var(--line);
+}
+.rank-row {
+  display: grid; grid-template-columns: 2.2em 28px minmax(0, 1fr) auto;
+  gap: 6px; align-items: center; padding: 5px 4px;
+  border-bottom: 1px solid #3a2b1e;
+}
+.rank-row.me { background: #5a2a1c; outline: 1px solid var(--gold-dim); }
+.rank-row img { width: 28px; height: 28px; object-fit: cover; display: block; background: #1a120c; }
+.rank-place { color: #f3cf6a; font-variant-numeric: tabular-nums; text-align: right; }
+.rank-who { min-width: 0; }
+.rank-who .name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rank-who .wallet { display: block; font-size: 10px; color: #cbb894; }
+.rank-val { color: #ffe9a0; font-size: 12px; white-space: nowrap; text-align: right; }
+#ranks-you { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+#ranks-you .fine { margin-top: 0; margin-bottom: 6px; }
+
 @media (max-width: 820px) {
-  #game { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto 220px auto; }
-  .panel { border-left: 0; border-top: 2px solid var(--gold-dim); max-height: 220px; }
+  #game { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto 260px auto; }
+  .panel { border-left: 0; border-top: 2px solid var(--gold-dim); max-height: 260px; }
   .avatar-grid { grid-template-columns: repeat(5, 1fr); }
   h1 { font-size: 32px; }
   .chat-dock { height: 120px; }

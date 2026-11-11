@@ -310,6 +310,7 @@ function hydrateAccount(a) {
   if (!a.equipped || typeof a.equipped !== "object") a.equipped = {};
   a.biggestFish = Math.max(0, Number(a.biggestFish) || 0);
   a.kills = Math.max(0, a.kills | 0);
+  a.periods = leaderboard.normalizePeriods(a.periods);
   return a;
 }
 
@@ -329,6 +330,7 @@ function createAccount({ name, avatar, wallet }) {
     equipped: {},
     biggestFish: 0,
     kills: 0,
+    periods: leaderboard.normalizePeriods(null),
     created: Date.now(),
   }));
 }
@@ -361,6 +363,7 @@ function snapshot(s) {
     equipped: a.equipped,
     biggestFish: a.biggestFish || 0,
     kills: a.kills || 0,
+    periods: a.periods || leaderboard.normalizePeriods(null),
     created: a.created,
   };
 }
@@ -515,7 +518,10 @@ function toast(s, text) {
 }
 
 function giveXp(s, skill, amount) {
+  amount = amount | 0;
+  if (amount <= 0) return;
   s.account.skills[skill] = (s.account.skills[skill] || 0) + amount;
+  leaderboard.addPeriodXp(s.account, skill, amount);
   const before = levelFromXp(s.account.skills[skill] - amount);
   const after = levelFromXp(s.account.skills[skill]);
   if (after.level > before.level) {
@@ -621,6 +627,7 @@ function finishGather(s, node) {
   let note = `You get ${item ? item.name : node.item}.`;
   if (node.item === "raw_fish" || node.type === "fish") {
     const kg = rollFishKg();
+    leaderboard.addPeriodFish(s.account, kg);
     const prev = Number(s.account.biggestFish) || 0;
     if (kg > prev) {
       s.account.biggestFish = kg;
@@ -680,8 +687,10 @@ function combatTick(s, now) {
     mob.respawnAt = now + 20000;
     giveXp(s, "combat", 30);
     s.account.kills = (s.account.kills || 0) + 1;
+    leaderboard.addPeriodKill(s.account);
     const gold = 5 + Math.floor(Math.random() * 11);
     s.account.gold += gold;
+    leaderboard.addPeriodGold(s.account, gold);
     invAdd(s.account.inventory, "bones", 1);
     toast(s, `The ${mob.name} is defeated. +${gold} gold, dog bones.`);
     cancelAction(s);
@@ -732,6 +741,7 @@ function shopSell(s, itemId, qty = 1) {
   if (!invRemove(s.account.inventory, itemId, qty)) { toast(s, "You don't have that."); return; }
   const gold = def.sell * qty;
   s.account.gold += gold;
+  leaderboard.addPeriodGold(s.account, gold);
   toast(s, `You sell ${qty}× ${def.name} for ${gold} gold.`);
   send(s.ws, { type: "me", me: mePayload(s) });
 }
@@ -1090,10 +1100,11 @@ app.get("/avatars/:id", async (req, res) => {
 
 app.get("/api/leaderboard", (req, res) => {
   const board = String(req.query.board || "");
+  const period = String(req.query.period || "all");
   const limit = req.query.limit;
   const token = String(req.query.token || "");
   const viewer = token ? persist.getByToken(token) : null;
-  const payload = leaderboard.getLeaderboard(persist.allAccounts(), { board, limit, viewer });
+  const payload = leaderboard.getLeaderboard(persist.allAccounts(), { board, period, limit, viewer });
   if (payload.error) return res.status(400).json(payload);
   res.setHeader("Cache-Control", "public, max-age=15");
   res.json(payload);

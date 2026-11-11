@@ -24,6 +24,7 @@
     lastState: 0,
     tab: "skills",
     ranksBoard: "fishing",
+    ranksPeriod: "all",
     ranksTimer: 0,
     avatar: "classic-paw",
     avatarTouched: false,
@@ -400,6 +401,14 @@
     const youBox = $("ranks-you");
     if (!list) return;
     if (data && data.boards) fillRanksSelector(data.boards);
+    const reset = $("ranks-reset");
+    if (reset) {
+      reset.textContent = (data && data.reset) || "";
+      reset.hidden = !(data && data.reset);
+    }
+    document.querySelectorAll(".ranks-periods button").forEach((b) => {
+      b.classList.toggle("on", b.dataset.period === (state.ranksPeriod || "all"));
+    });
     list.innerHTML = "";
     const meName = state.me && state.me.name;
     const entries = (data && data.entries) || [];
@@ -434,7 +443,8 @@
     const board = state.ranksBoard || "fishing";
     const token = (state.me && state.me.token) || localStorage.getItem("nhl-token") || "";
     try {
-      const r = await fetch("/api/leaderboard?board=" + encodeURIComponent(board) + "&limit=25" + (token ? "&token=" + encodeURIComponent(token) : ""));
+      const period = state.ranksPeriod || "all";
+      const r = await fetch("/api/leaderboard?board=" + encodeURIComponent(board) + "&period=" + encodeURIComponent(period) + "&limit=25" + (token ? "&token=" + encodeURIComponent(token) : ""));
       const data = await r.json();
       if (state.tab !== "ranks") return;
       renderRanks(data);
@@ -982,6 +992,17 @@
       loadRanks();
     });
   }
+  document.querySelectorAll(".ranks-periods button").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.ranksPeriod = b.dataset.period || "all";
+      document.querySelectorAll(".ranks-periods button").forEach((x) => x.classList.toggle("on", x === b));
+      // Board option labels may change (Total level vs Total XP).
+      const sel = $("ranks-board");
+      if (sel) delete sel.dataset.filled;
+      fillRanksSelector();
+      loadRanks();
+    });
+  });
 
   function bytesToBase64(bytes) {
     let bin = "";

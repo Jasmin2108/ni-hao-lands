@@ -152,6 +152,13 @@ footer .ca, .placeholder {
 }
 .placeholder { cursor: default; text-decoration: none; color: #e8c56a; }
 
+.ranks-periods { display: flex; gap: 4px; margin-bottom: 6px; }
+.ranks-periods button {
+  flex: 1; background: var(--panel-2); color: var(--cream); border: 1px solid var(--line);
+  padding: 5px 4px; cursor: pointer; font-size: 11px;
+}
+.ranks-periods button.on { background: #5a2a1c; color: #ffe9a0; border-color: var(--gold-dim); }
+#ranks-reset { margin: 0 0 8px; }
 .ranks-label { display: block; color: var(--gold); font-size: 12px; margin-bottom: 8px; }
 #ranks-board {
   display: block; width: 100%; margin-top: 4px; padding: 6px 8px;

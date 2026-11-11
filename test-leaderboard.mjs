@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const lb = require("./leaderboard.js");
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ARG = process.argv[2] || "";
@@ -73,23 +77,36 @@ function player(p) {
     equipped: {},
     biggestFish: p.biggestFish || 0,
     kills: p.kills || 0,
+    periods: p.periods || undefined,
     created: Date.now(),
+  };
+}
+
+function periods(which, w, m) {
+  const curW = lb.isoWeekId();
+  const curM = lb.monthId();
+  return {
+    week: which.includes("w") ? curW : "2020-W01",
+    month: which.includes("m") ? curM : "2020-01",
+    w: { ...lb.emptyPeriodStats(), ...(w || {}) },
+    m: { ...lb.emptyPeriodStats(), ...(m || {}) },
   };
 }
 
 async function seed(dataDir) {
   const players = [
-    player({ id: "a_ann", name: "AnglerAnn", skills: { fishing: 5000 }, gold: 10, biggestFish: 4.2 }),
+    player({ id: "a_ann", name: "AnglerAnn", skills: { fishing: 5000 }, gold: 10, biggestFish: 4.2, periods: periods("wm", { fishing: 100, xp: 100, fish: 1.0 }, { fishing: 400, xp: 400, fish: 2.0 }) }),
     player({ id: "a_fay", name: "FisherFay", skills: { fishing: 4000 }, gold: 8, biggestFish: 3.1 }),
     player({ id: "a_hank", name: "HookHank", skills: { fishing: 3000 }, gold: 7, biggestFish: 2.0 }),
-    player({ id: "a_mia", name: "MidMia", skills: { fishing: 200 }, gold: 20, biggestFish: 1.1, avatar: "coat" }),
+    player({ id: "a_mia", name: "MidMia", skills: { fishing: 200 }, gold: 20, biggestFish: 1.1, avatar: "coat", periods: periods("wm", { fishing: 40, xp: 40, fish: 2.5 }, { fishing: 40, xp: 40, fish: 2.5 }) }),
     player({ id: "a_sam", name: "SmallSam", skills: { fishing: 22 }, gold: 15, biggestFish: 0.4 }),
-    player({ id: "a_yuri", name: "YarnYuri", skills: { yarn: 2200 }, gold: 11 }),
-    player({ id: "a_max", name: "MinerMax", skills: { mining: 1800 }, gold: 50 }),
+    player({ id: "a_yuri", name: "YarnYuri", skills: { yarn: 2200 }, gold: 11, periods: periods("wm", { fishing: 900, yarn: 400, xp: 1300 }, { fishing: 200, yarn: 400, xp: 600 }) }),
+    player({ id: "a_max", name: "MinerMax", skills: { mining: 1800 }, gold: 50, periods: periods("wm", { gold: 80, mining: 50, xp: 50 }, { gold: 80, mining: 200, xp: 200 }) }),
     player({ id: "a_chen", name: "ChefChen", skills: { cooking: 1600 }, gold: 9 }),
-    player({ id: "a_fay2", name: "FighterFay", skills: { combat: 1400 }, gold: 30, kills: 12 }),
-    player({ id: "a_tom", name: "TotalTom", skills: { fishing: 800, yarn: 800, mining: 800, cooking: 800, combat: 800 }, gold: 40, kills: 3, biggestFish: 1.8 }),
-    player({ id: "a_gus", name: "GoldieGus", gold: 999, wallet: "Gh7kLmNpQrStUvWxYzAbCdEfGhIjKlMnOpQrStUvWx" }),
+    player({ id: "a_fay2", name: "FighterFay", skills: { combat: 1400 }, gold: 30, kills: 12, periods: periods("wm", { kills: 2, combat: 60, xp: 60 }, { kills: 8, combat: 200, xp: 200 }) }),
+    player({ id: "a_tom", name: "TotalTom", skills: { fishing: 800, yarn: 800, mining: 800, cooking: 800, combat: 800 }, gold: 40, kills: 3, biggestFish: 1.8, periods: periods("wm", { kills: 5, xp: 100, fishing: 20, yarn: 20, mining: 20, cooking: 20, combat: 20 }, { kills: 5, xp: 300, fishing: 60, yarn: 60, mining: 60, cooking: 60, combat: 60 }) }),
+    player({ id: "a_gus", name: "GoldieGus", gold: 999, wallet: "Gh7kLmNpQrStUvWxYzAbCdEfGhIjKlMnOpQrStUvWx", periods: periods("wm", { gold: 20 }, { gold: 40 }) }),
+    player({ id: "a_ghost", name: "WeekGhost", skills: { fishing: 10 }, periods: periods("", { fishing: 99999, xp: 99999 }, { fishing: 99999, xp: 99999 }) }),
     player({ id: "a_pt", name: "PersistTest1", skills: { fishing: 99999 }, gold: 99999, biggestFish: 99, kills: 99 }),
     player({ id: "a_ps", name: "PickerShotX", skills: { fishing: 88888 } }),
     player({ id: "a_wc", name: "WalletCat", skills: { fishing: 77777 } }),
@@ -140,6 +157,10 @@ async function getBoard(base, board, extra = "") {
   const r = await fetch(base + "/api/leaderboard?board=" + encodeURIComponent(board) + extra);
   const json = await r.json().catch(() => ({}));
   return { status: r.status, json };
+}
+
+async function getPeriod(base, board, period, extra = "") {
+  return getBoard(base, board, "&period=" + encodeURIComponent(period) + extra);
 }
 
 async function run(base, { seeded }) {
@@ -198,6 +219,41 @@ async function run(base, { seeded }) {
     const gus = await getBoard(base, "gold", "&limit=25&token=gus_test_token_leaderboard_01");
     assert(gus.json.you && gus.json.you.name === "GoldieGus" && gus.json.you.rank === 1, "GoldieGus should see own #1 gold rank");
     console.log("highlighted in-top you-rank ok");
+
+    const badPeriod = await getPeriod(base, "fishing", "nope");
+    assert(badPeriod.status === 400 && badPeriod.json.error, "expected 400 for unknown period");
+    console.log("unknown period rejected");
+
+    const weekFish = await getPeriod(base, "fishing", "week");
+    assert(weekFish.status === 200, "weekly fishing failed");
+    assert(weekFish.json.period === "week" && weekFish.json.periodId === lb.isoWeekId(), "week id should be " + lb.isoWeekId() + ", got " + weekFish.json.periodId);
+    assert(weekFish.json.reset && /Monday 00:00 Helsinki/.test(weekFish.json.reset), "weekly reset text missing: " + weekFish.json.reset);
+    assert(weekFish.json.entries[0].name === "YarnYuri" && weekFish.json.entries[0].value === 900, "weekly fishing #1 should be YarnYuri 900 xp, got " + JSON.stringify(weekFish.json.entries[0]));
+    assert(!names(weekFish.json.entries).includes("WeekGhost"), "stale week counters must not appear");
+    assert(!names(weekFish.json.entries).includes("AnglerAnn") || weekFish.json.entries.find((e) => e.name === "AnglerAnn").rank > 1, "AnglerAnn should not lead weekly fishing");
+    console.log("weekly fishing", weekFish.json.entries.map((e) => e.name + " " + e.display).join(" | "));
+
+    const weekGold = await getPeriod(base, "gold", "week");
+    assert(weekGold.json.entries[0].name === "MinerMax" && weekGold.json.entries[0].value === 80, "weekly gold should rank earned gold, #1 MinerMax 80, got " + JSON.stringify(weekGold.json.entries[0]));
+    assert(weekGold.json.entries.find((e) => e.name === "GoldieGus").value === 20, "GoldieGus weekly earned gold should be 20, not 999 balance");
+    console.log("weekly gold", weekGold.json.entries.map((e) => e.name + " " + e.display).join(" | "));
+
+    const weekTotal = await getPeriod(base, "total", "week");
+    assert(weekTotal.json.entries[0].name === "YarnYuri" && weekTotal.json.entries[0].value === 1300, "weekly total XP #1 YarnYuri 1300");
+    assert(weekTotal.json.name === "Total XP", "weekly total board name should be Total XP");
+
+    const weekCatch = await getPeriod(base, "fish", "week");
+    assert(weekCatch.json.entries[0].name === "MidMia" && weekCatch.json.entries[0].value === 2.5, "weekly biggest fish should be MidMia 2.5, not all-time 4.2");
+
+    const weekKills = await getPeriod(base, "kills", "week");
+    assert(weekKills.json.entries[0].name === "TotalTom" && weekKills.json.entries[0].value === 5, "weekly kills #1 should be TotalTom 5");
+
+    const monthFish = await getPeriod(base, "fishing", "month");
+    assert(monthFish.status === 200 && monthFish.json.periodId === lb.monthId(), "month id mismatch");
+    assert(/1st/.test(monthFish.json.reset || ""), "monthly reset text missing");
+    assert(monthFish.json.entries[0].name === "AnglerAnn" && monthFish.json.entries[0].value === 400, "monthly fishing #1 should be AnglerAnn 400, got " + JSON.stringify(monthFish.json.entries[0]));
+    assert(!names(monthFish.json.entries).includes("WeekGhost"), "stale month counters must not appear");
+    console.log("monthly fishing", monthFish.json.entries.map((e) => e.name + " " + e.display).join(" | "));
   }
 
   const first = await getBoard(base, "gold");

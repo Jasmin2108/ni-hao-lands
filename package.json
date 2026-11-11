@@ -11,7 +11,8 @@
     "test:wallet": "node test-wallet-auth.mjs",
     "test:leaderboard": "node test-leaderboard.mjs",
     "test:rename": "node test-rename.mjs",
-    "test:world": "node test-world.mjs"
+    "test:world": "node test-world.mjs",
+    "test:move": "node test-move-intents.mjs"
   },
   "engines": {
     "node": ">=18"

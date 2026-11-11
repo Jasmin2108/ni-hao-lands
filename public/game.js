@@ -296,6 +296,8 @@
         state.smithRecipes = msg.smithRecipes || [];
         maybeNamePrompt();
         applyMobileChrome();
+        applyTouchControls();
+        showControlsHint();
         break;
       case "state":
         state.players = msg.players || [];
@@ -317,6 +319,9 @@
         rememberName(state.me && state.me.name);
         refreshHud();
         refreshTabs();
+        break;
+      case "stepReject":
+        if (msg.facing) { state.facing = msg.facing; state.facingUntil = performance.now() + 600; }
         break;
       case "renamed":
         if (msg.me) state.me = Object.assign(state.me || {}, msg.me);
@@ -804,7 +809,7 @@
     const near = (e) => Math.round(e.x) === tx && Math.round(e.y) === ty;
     const npc = state.npcs.find((n) => n.x === tx && n.y === ty);
     if (npc) return { kind: "npc", e: npc };
-    const node = state.nodes.find((n) => n.x === tx && n.y === ty);
+    const node = state.nodes.find((n) => n.x === tx && n.y === ty) || state.nodes.find((n) => n.rockX === tx && n.rockY === ty);
     if (node) return { kind: "node", e: node };
     const mob = state.mobs.find((m) => m.alive && near(m));
     if (mob) return { kind: "mob", e: mob };
@@ -885,13 +890,20 @@
     menu.style.top = Math.max(pad, y) + "px";
   }
 
-  canvas.addEventListener("click", (e) => {
-    if (state.suppressClick) { state.suppressClick = false; return; }
+  function tapAt(clientX, clientY) {
     hideContextMenu();
-    const t = tileAt(e.clientX, e.clientY);
+    const t = tileAt(clientX, clientY);
     if (!t) return;
     state.clickFx = { x: t.tx, y: t.ty, t: performance.now() };
+    state.facing = null;
     actOnEntity(entityAt(t.tx, t.ty), t);
+  }
+
+  canvas.addEventListener("click", (e) => {
+    if (state.suppressClick) { state.suppressClick = false; return; }
+    // A touch tap is handled in touchend; ignore any synthetic click that follows it.
+    if (performance.now() - (state.lastTouchTap || 0) < 700) return;
+    tapAt(e.clientX, e.clientY);
   });
 
   canvas.addEventListener("contextmenu", (e) => {
@@ -907,11 +919,14 @@
   });
 
   // Long-press = context menu; pinch = zoom. Prevent the following click.
-  let pressTimer = 0, pressStart = null, pinchStart = null;
+  // touchstart calls preventDefault (so the page doesn't scroll/zoom), which also stops the
+  // browser from sending a click. Taps are therefore detected here and walked/acted on in touchend.
+  let pressTimer = 0, pressStart = null, pinchStart = null, tapCandidate = null;
   canvas.addEventListener("touchstart", (e) => {
     if (e.touches.length === 2) {
       clearTimeout(pressTimer);
       pressStart = null;
+      tapCandidate = null;
       const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
       pinchStart = { dist: d, zoom: state.zoom || 1 };
       e.preventDefault();
@@ -920,7 +935,9 @@
     if (e.touches.length === 1) {
       const touch = e.touches[0];
       pressStart = { x: touch.clientX, y: touch.clientY };
+      tapCandidate = { x: touch.clientX, y: touch.clientY, t: performance.now() };
       pressTimer = setTimeout(() => {
+        tapCandidate = null;
         const t = tileAt(touch.clientX, touch.clientY);
         if (!t) return;
         state.suppressClick = true;
@@ -939,14 +956,22 @@
     if (pressStart && e.touches[0]) {
       const dx = e.touches[0].clientX - pressStart.x;
       const dy = e.touches[0].clientY - pressStart.y;
-      if (Math.hypot(dx, dy) > 12) { clearTimeout(pressTimer); pressStart = null; }
+      if (Math.hypot(dx, dy) > 12) { clearTimeout(pressTimer); pressStart = null; tapCandidate = null; }
     }
   }, { passive: false });
   canvas.addEventListener("touchend", (e) => {
     clearTimeout(pressTimer);
-    pinchStart = null;
     e.preventDefault();
+    const tap = tapCandidate;
+    tapCandidate = null;
+    if (e.touches.length === 0) pinchStart = null;
+    if (tap && e.touches.length === 0 && !state.suppressClick && performance.now() - tap.t < 600) {
+      state.lastTouchTap = performance.now();
+      tapAt(tap.x, tap.y);
+    }
+    if (state.suppressClick && e.touches.length === 0) setTimeout(() => { state.suppressClick = false; }, 400);
   }, { passive: false });
+  canvas.addEventListener("touchcancel", () => { clearTimeout(pressTimer); tapCandidate = null; pinchStart = null; pressStart = null; });
 
   function nodeLabel(n) {
     if (n.label) return n.label + (n.level ? " (lvl " + n.level + ")" : "");
@@ -1319,6 +1344,7 @@
 
   let raf = 0;
   function loop(now) {
+    pumpMovement(now);
     drawWorld(now);
     raf = requestAnimationFrame(loop);
   }
@@ -1684,7 +1710,6 @@
       }
     });
   }
-  window.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
 
   async function connectWallet() {
     const status = $("wallet-status");
@@ -1713,23 +1738,247 @@
     }
   }
 
-  // keyboard: arrow/WASD optional nudge via move to neighbor
-  const keys = {};
-  window.addEventListener("keydown", (e) => {
-    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
-    keys[e.key] = true;
-    const dir = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0], w: [0, -1], a: [-1, 0], s: [0, 1], d: [1, 0], W: [0, -1], A: [-1, 0], S: [0, 1], D: [1, 0] };
-    if (dir[e.key] && state.me) {
-      e.preventDefault();
-      send({ type: "move", x: Math.round(state.me.x) + dir[e.key][0], y: Math.round(state.me.y) + dir[e.key][1] });
+  // ===================== Direct movement controls =====================
+  // Keyboard (WASD / arrows) and the on-screen joystick send one-tile "step" intents.
+  // The server validates walls, corners, zone gates and walk speed.
+  const KEYDIR = {
+    KeyW: [0, -1], ArrowUp: [0, -1], KeyS: [0, 1], ArrowDown: [0, 1],
+    KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0],
+  };
+  const KEYALIAS = { w: "KeyW", a: "KeyA", s: "KeyS", d: "KeyD", W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD" };
+  const held = new Set();
+  const joy = { id: null, active: false, dx: 0, dy: 0 };
+  const moveState = { lastSent: 0, lastDir: null, active: false };
+  const STEP_SPEED = 4.2;
+
+  function typingTarget(el) {
+    return !!(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable));
+  }
+  function inGame() { return !!state.me && !$("game").hidden; }
+
+  function focusChat() {
+    if (document.body.classList.contains("chat-collapsed")) {
+      document.body.classList.remove("chat-collapsed");
+      state.chatUnread = 0;
+      updateChatUnread();
     }
-    if (e.key === "Escape") send({ type: "stop" });
+    const input = $("chat-input");
+    if (input) input.focus();
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      hideContextMenu();
+      if (typingTarget(document.activeElement)) { document.activeElement.blur(); return; }
+      if (inGame()) send({ type: "stop" });
+      return;
+    }
+    if (typingTarget(e.target) || !inGame()) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!$("name-prompt").hidden) return;
+    if (e.key === "Enter") { e.preventDefault(); focusChat(); return; }
+    const code = KEYDIR[e.code] ? e.code : KEYALIAS[e.key];
+    if (code && KEYDIR[code]) {
+      e.preventDefault();
+      held.add(code);
+      return;
+    }
+    if (e.code === "Space" || e.code === "KeyE" || e.key === "e" || e.key === "E") {
+      e.preventDefault();
+      if (!e.repeat) interactNearby();
+    }
   });
+  window.addEventListener("keyup", (e) => {
+    held.delete(e.code);
+    if (KEYALIAS[e.key]) held.delete(KEYALIAS[e.key]);
+  });
+  window.addEventListener("blur", () => held.clear());
+  document.addEventListener("focusin", (e) => { if (typingTarget(e.target)) held.clear(); });
+
+  function currentDir() {
+    let dx = 0, dy = 0;
+    for (const c of held) { const d = KEYDIR[c]; if (d) { dx += d[0]; dy += d[1]; } }
+    dx = Math.sign(dx); dy = Math.sign(dy);
+    if (!dx && !dy && joy.active) { dx = joy.dx; dy = joy.dy; }
+    return [dx, dy];
+  }
+  function facingOf(dx, dy) {
+    if (dx && Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? "right" : "left";
+    if (dy) return dy > 0 ? "down" : "up";
+    return null;
+  }
+
+  function pumpMovement(now) {
+    if (!inGame()) return;
+    const [dx, dy] = currentDir();
+    if (!dx && !dy) {
+      if (moveState.active) {
+        send({ type: "step", dx: 0, dy: 0 });
+        moveState.active = false;
+        moveState.lastDir = null;
+      }
+      return;
+    }
+    const key = dx + "," + dy;
+    const interval = ((dx && dy ? 1.414 : 1) / STEP_SPEED) * 1000 * 0.8;
+    const changed = key !== moveState.lastDir;
+    if ((changed && now - moveState.lastSent > 75) || now - moveState.lastSent > interval) {
+      send({ type: "step", dx, dy });
+      if (!moveState.active) { hideContextMenu(); state.clickFx = null; }
+      moveState.lastSent = now;
+      moveState.lastDir = key;
+      moveState.active = true;
+    }
+    state.facing = facingOf(dx, dy);
+    state.facingUntil = now + 450;
+  }
+
+  function fishWaterTile(n) {
+    const tl = state.world && state.world.tiles;
+    if (!tl) return null;
+    let best = null, bd = 99;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const row = tl[n.y + dy];
+      const k = row && row[n.x + dx];
+      if (k === "water" || k === "deepwater") { const d = Math.abs(dx) + Math.abs(dy); if (d < bd) { bd = d; best = { x: n.x + dx, y: n.y + dy }; } }
+    }
+    return best;
+  }
+
+  function interactNearby() {
+    if (!inGame()) return;
+    const mx = Math.round(state.me.x), my = Math.round(state.me.y);
+    const mine = state.players.find((p) => p.id === state.me.id);
+    const facing = (state.facing && performance.now() < (state.facingUntil || 0) + 4000 ? state.facing : null) || (mine && mine.facing) || "down";
+    const fv = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[facing] || [0, 1];
+    const fxT = mx + fv[0], fyT = my + fv[1];
+    let best = null, bestScore = 1e9;
+    const consider = (id, tx, ty, base) => {
+      const d = Math.max(Math.abs(tx - mx), Math.abs(ty - my));
+      if (d > 1) return;
+      let score = d + base;
+      if (tx === fxT && ty === fyT) score -= 2;
+      if (score < bestScore) { bestScore = score; best = id; }
+    };
+    for (const n of state.nodes) {
+      const pen = n.depleted ? 1.5 : 0;
+      consider(n.id, n.x, n.y, pen);
+      if (n.rockX != null) consider(n.id, n.rockX, n.rockY, pen);
+      if (n.type === "fish") { const w = fishWaterTile(n); if (w) consider(n.id, w.x, w.y, pen); }
+    }
+    for (const npc of state.npcs) consider(npc.id, npc.x, npc.y, 0);
+    for (const m of state.mobs) if (m.alive) consider(m.id, Math.round(m.x), Math.round(m.y), -0.5);
+    if (!best) { toast("Nothing to use here. Face a tree, rock, fishing spot or person and press E."); return; }
+    hideContextMenu();
+    send({ type: "interact", id: best });
+  }
+
+  // ----- on-screen joystick (phones) -----
+  function touchControlsDefault() {
+    const coarse = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    const fine = window.matchMedia && window.matchMedia("(pointer: fine)").matches;
+    return coarse || (("ontouchstart" in window) && !fine);
+  }
+  function touchControlsOn() {
+    const pref = localStorage.getItem("nhl-touch");
+    if (pref === "on") return true;
+    if (pref === "off") return false;
+    return touchControlsDefault();
+  }
+  function applyTouchControls() {
+    const on = touchControlsOn();
+    document.body.classList.toggle("touch-on", on);
+    const tc = $("touch-controls");
+    if (tc) tc.hidden = !on;
+    const btn = $("controls-toggle");
+    if (btn) { btn.classList.toggle("on", on); btn.title = on ? "Hide on-screen joystick" : "Show on-screen joystick"; btn.setAttribute("aria-pressed", on ? "true" : "false"); }
+    if (!on) resetJoy();
+  }
+  function resetJoy() {
+    joy.id = null; joy.active = false; joy.dx = 0; joy.dy = 0;
+    const knob = $("joystick-knob");
+    if (knob) knob.style.transform = "translate(-50%, -50%)";
+    const base = $("joystick");
+    if (base) base.classList.remove("held");
+  }
+  const JOY_DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+  function updateJoy(e) {
+    const base = $("joystick");
+    const knob = $("joystick-knob");
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    let vx = e.clientX - cx, vy = e.clientY - cy;
+    const max = rect.width / 2 - 8;
+    const mag = Math.hypot(vx, vy);
+    if (mag > max) { vx = (vx / mag) * max; vy = (vy / mag) * max; }
+    knob.style.transform = `translate(calc(-50% + ${vx}px), calc(-50% + ${vy}px))`;
+    if (mag / max < 0.3) { joy.dx = 0; joy.dy = 0; return; }
+    const oct = (Math.round(Math.atan2(vy, vx) / (Math.PI / 4)) + 8) % 8;
+    joy.dx = JOY_DIRS[oct][0]; joy.dy = JOY_DIRS[oct][1];
+  }
+  (() => {
+    const base = $("joystick");
+    if (base) {
+      base.addEventListener("pointerdown", (e) => {
+        if (joy.id != null) return;
+        e.preventDefault();
+        joy.id = e.pointerId;
+        joy.active = true;
+        base.classList.add("held");
+        try { base.setPointerCapture(e.pointerId); } catch {}
+        updateJoy(e);
+      });
+      base.addEventListener("pointermove", (e) => { if (e.pointerId === joy.id) { e.preventDefault(); updateJoy(e); } });
+      const end = (e) => { if (e.pointerId === joy.id) resetJoy(); };
+      base.addEventListener("pointerup", end);
+      base.addEventListener("pointercancel", end);
+      base.addEventListener("lostpointercapture", end);
+      base.addEventListener("contextmenu", (e) => e.preventDefault());
+    }
+    const act = $("action-btn");
+    if (act) {
+      act.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        act.classList.add("held");
+        interactNearby();
+      });
+      const up = () => act.classList.remove("held");
+      act.addEventListener("pointerup", up);
+      act.addEventListener("pointercancel", up);
+      act.addEventListener("pointerleave", up);
+      act.addEventListener("contextmenu", (e) => e.preventDefault());
+    }
+    const tog = $("controls-toggle");
+    if (tog) tog.addEventListener("click", () => {
+      localStorage.setItem("nhl-touch", touchControlsOn() ? "off" : "on");
+      applyTouchControls();
+    });
+    applyTouchControls();
+  })();
+
+  function showControlsHint() {
+    const el = $("key-hint");
+    if (!el) return;
+    const touch = touchControlsOn();
+    const flag = touch ? "nhl-hint-touch" : "nhl-hint-keys";
+    if (localStorage.getItem(flag)) return;
+    localStorage.setItem(flag, "1");
+    el.textContent = touch ? "Drag the stick to move · tap Use to interact" : "WASD / arrows to move, E to interact";
+    el.hidden = false;
+    el.classList.add("show");
+    clearTimeout(showControlsHint.timer);
+    showControlsHint.timer = setTimeout(() => {
+      el.classList.remove("show");
+      setTimeout(() => { el.hidden = true; }, 400);
+    }, 7000);
+  }
 
   window.__nhl = {
     send,
     getState: () => state,
     setZoom,
+    interactNearby,
+    setTouchControls: (on) => { localStorage.setItem("nhl-touch", on ? "on" : "off"); applyTouchControls(); },
   };
 
   bootLogin().then(() => {

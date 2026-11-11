@@ -44,6 +44,8 @@ const CHAT_WINDOW_MAX = 6;
 const INV_SIZE = 28;
 const PLAYER_HP = 20;
 const VIEW_RADIUS = 40;
+const STEP_WINDOW_MS = 1000;
+const STEP_WINDOW_MAX = 20; // keyboard/joystick step intents per second (excess is dropped)
 
 const PROFANITY = [
   "fuck", "shit", "bitch", "asshole", "cunt", "nigger", "nigga", "faggot",
@@ -561,6 +563,7 @@ function publicPlayer(s) {
     wallet: s.account.wallet || null,
     walletLabel: shortWallet(s.account.wallet),
     combatLevel: combatLevel(s.account),
+    facing: s.facing || "down",
   };
 }
 
@@ -593,6 +596,7 @@ function compactNodes() {
     level: n.level || 1, label: n.label || n.type,
     resource: n.resource || null, action: n.action || null,
     charges: n.depleted ? 0 : (n.charges || 0),
+    rockX: n.rockX != null ? n.rockX : null, rockY: n.rockY != null ? n.rockY : null,
   }));
 }
 
@@ -879,6 +883,8 @@ function walkThen(s, tx, ty, cb) {
   s.path = path;
   s.pending = cb || null;
   s.action = null;
+  s.stepMode = false;
+  s.nextStep = null;
 }
 
 function rawFishOptions(account) {
@@ -1056,6 +1062,7 @@ function combatTick(s, now) {
   mob.hp -= dmg;
   mob.target = s.id;
   toast(s, `You hit the ${mob.name} for ${dmg}.`);
+  send(s.ws, { type: "fx", kind: "hit", target: mob.id, dmg, x: mob.fx, y: mob.fy });
   if (mob.hp <= 0) {
     mob.alive = false;
     mob.hp = 0;
@@ -1082,6 +1089,7 @@ function hitPlayer(s, dmg, fromName) {
   dmg = Math.max(1, dmg - Math.floor((bonus.def || 0) / 2));
   s.hp -= dmg;
   send(s.ws, { type: "toast", text: `${fromName || "A monster"} hits you for ${dmg}.` });
+  send(s.ws, { type: "fx", kind: "hit", target: s.id, dmg, x: s.x, y: s.y, onMe: true });
   if (s.hp <= 0) {
     s.hp = PLAYER_HP;
     s.x = staticWorld.spawn.x;
@@ -1293,6 +1301,73 @@ function onHello(ws, msg) {
   broadcastState();
 }
 
+function facingFor(dx, dy) {
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "right" : "left";
+  if (dy !== 0) return dy > 0 ? "down" : "up";
+  return null;
+}
+
+// Keyboard / joystick movement: one tile per intent, validated here.
+// The tick loop still moves the player at WALK_SPEED, so intents can't teleport or speed up.
+function tryStep(s, dx, dy) {
+  const px = Math.round(s.x), py = Math.round(s.y);
+  const tx = px + dx, ty = py + dy;
+  const face = facingFor(dx, dy);
+  if (face) s.facing = face;
+  let reason = null;
+  if (!isWalkable(tiles, tx, ty)) reason = "blocked";
+  else if (dx !== 0 && dy !== 0 && (!isWalkable(tiles, px + dx, py) || !isWalkable(tiles, px, py + dy))) reason = "corner";
+  let gate = null;
+  if (!reason) {
+    gate = zoneBlocked(zoneAt(tx, ty), s.account);
+    if (gate) reason = "gate";
+  }
+  if (reason) {
+    s.stepMode = false;
+    s.nextStep = null;
+    send(s.ws, { type: "stepReject", reason, x: px, y: py, facing: s.facing });
+    if (gate && Date.now() - (s.lastGateToast || 0) > 3000) {
+      s.lastGateToast = Date.now();
+      toast(s, gate);
+    }
+    return false;
+  }
+  s.path = [{ x: tx, y: ty }];
+  s.stepMode = true;
+  return true;
+}
+
+function handleStep(s, msg) {
+  const now = Date.now();
+  s.stepTimes = (s.stepTimes || []).filter((t) => now - t < STEP_WINDOW_MS);
+  if (s.stepTimes.length >= STEP_WINDOW_MAX) {
+    if (!s.stepFlood || now - s.stepFlood > 1000) {
+      s.stepFlood = now;
+      send(s.ws, { type: "stepReject", reason: "rate", x: Math.round(s.x), y: Math.round(s.y) });
+    }
+    return;
+  }
+  s.stepTimes.push(now);
+  const dx = Math.sign(Number(msg.dx) || 0);
+  const dy = Math.sign(Number(msg.dy) || 0);
+  if (!dx && !dy) { s.nextStep = null; return; }
+  // Manual movement cancels skilling, combat and any click-to-walk route.
+  if (s.action) cancelAction(s);
+  s.pending = null;
+  s.targetMob = null;
+  if (s.path && s.path.length) {
+    // Finish the tile we're crossing, then take this step.
+    s.path = s.path.slice(0, 1);
+    s.stepMode = true;
+    s.nextStep = { dx, dy };
+    const face = facingFor(dx, dy);
+    if (face) s.facing = face;
+    return;
+  }
+  s.nextStep = null;
+  tryStep(s, dx, dy);
+}
+
 function onMessage(ws, raw) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
@@ -1313,10 +1388,15 @@ function onMessage(ws, raw) {
       cancelAction(s);
       s.pending = null;
       s.targetMob = null;
+      s.stepMode = false;
+      s.nextStep = null;
       s.path = planned;
       if (!planned.length && !(Math.round(s.x) === x && Math.round(s.y) === y)) toast(s, "No path.");
       break;
     }
+    case "step":
+      handleStep(s, msg);
+      break;
     case "interact":
       if (typeof msg.id === "string") interact(s, msg.id, msg);
       break;
@@ -1342,6 +1422,8 @@ function onMessage(ws, raw) {
       cancelAction(s);
       s.path = [];
       s.pending = null;
+      s.nextStep = null;
+      s.stepMode = false;
       break;
     case "wallet":
       // client reports a public key after a read-only Phantom connect. No signatures accepted.
@@ -1375,6 +1457,8 @@ function tick(dt, now) {
       const dx = step.x - s.x, dy = step.y - s.y;
       const dist = Math.hypot(dx, dy);
       const move = WALK_SPEED * dt;
+      const face = facingFor(dx, dy);
+      if (face) s.facing = face;
       if (dist <= move || dist < 0.02) {
         s.x = step.x;
         s.y = step.y;
@@ -1383,6 +1467,14 @@ function tick(dt, now) {
           const cb = s.pending;
           s.pending = null;
           cb();
+        }
+        if (!s.path.length && s.stepMode) {
+          s.stepMode = false;
+          if (s.nextStep) {
+            const n = s.nextStep;
+            s.nextStep = null;
+            tryStep(s, n.dx, n.dy);
+          }
         }
       } else {
         s.x += (dx / dist) * move;

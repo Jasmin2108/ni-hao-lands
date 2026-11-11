@@ -141,8 +141,6 @@ def phone(br):
     cb = pg.locator("#game canvas").first.bounding_box()
     p0 = me(pg); pg.touchscreen.tap(cb["x"] + cb["width"] / 2 + 70, cb["y"] + cb["height"] / 2 - 40); time.sleep(2.0)
     p1 = me(pg); ok(abs(p1["x"] - p0["x"]) + abs(p1["y"] - p0["y"]) >= 1, f"phone: tap-to-walk ({p0['x']},{p0['y']} -> {p1['x']},{p1['y']})")
-    send(pg, {"type": "interact", "id": "n2"})
-    wait(pg, lambda: me(pg)["action"] == "gather", 40)
     st = {"tapped": False, "res": None}
     def use_tap():
         c = pg.evaluate("(() => { const c = window.__nhl.getChance().ch; const now = performance.now(); return !!(c && !c.done && c.kind === 'bite' && now >= c.openAt + 120 && now <= c.closeAt - 120); })()")
@@ -152,8 +150,14 @@ def phone(br):
             st["res"] = pg.evaluate("window.__nhl.getChance().result")
             return st["res"] is not None
         return False
-    wait(pg, use_tap, 40, 0.03)
-    ok(st["tapped"] and st["res"] and st["res"].get("ok"), f"phone: Use button lands the bite window ({st['res']})")
+    def cast():
+        spot = pg.evaluate("(() => { const n = window.__nhl.getState().nodes.filter(n => n.type === 'fish' && n.resource === 'carp' && !n.depleted); return n.length ? n[n.length - 1].id : 'n2'; })()")
+        send(pg, {"type": "interact", "id": spot})
+    t_end = time.time() + 90
+    while time.time() < t_end and not use_tap():
+        if pg.evaluate("!window.__pt.me().action") and not st["tapped"]: cast(); time.sleep(0.5)
+        time.sleep(0.03)
+    ok(st["tapped"] and st["res"] and st["res"].get("ok"), f"phone: Use button lands the bite window ({st['res']}) {'' if st['res'] else {'tapped': st['tapped'], **recent(pg)}}")
     pg.click("#sound-settings"); ok(pg.is_visible("#sound-pop"), "phone: sound popover opens")
     pg.click("#sound-btn"); ok(pg.evaluate("window.NHLAudio.settings().muted"), "phone: speaker button mutes")
     pg.click("#sound-btn")

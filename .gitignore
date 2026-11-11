@@ -7,3 +7,6 @@ world-*.png
 mobile-*.png
 screenshot.png
 gfx-*.png
+
+# large synthesized demo renders (regenerate locally; analysis.json is kept)
+sound-demo/*.wav

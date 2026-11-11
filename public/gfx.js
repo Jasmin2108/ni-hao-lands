@@ -843,8 +843,29 @@
   }
   function itemIconCanvas(id) {
     return iconCanvas((g) => {
-      const fishCols = { minnow: ["#9fb8c4", "#dfeef4"], fish: ["#7f9aa8", "#cfe2ea"], koi: ["#f0904a", "#fff0e0"], golden_koi: ["#e6b84a", "#fff0a8"], lucky_koi: ["#f2c230", "#fffbe0"] };
+      const fishCols = { minnow: ["#9fb8c4", "#dfeef4"], fish: ["#7f9aa8", "#cfe2ea"], koi: ["#f0904a", "#fff0e0"], golden_koi: ["#e6b84a", "#fff0a8"], lucky_koi: ["#f2c230", "#fffbe0"], moon_koi: ["#c8d4f0", "#ffffff"] };
       const sparkle = () => { px(g, 13, 1, 1, 3, "#fffbe0"); px(g, 12, 2, 3, 1, "#fffbe0"); };
+      const qm = /^(.*)_(fine|perfect)$/.exec(id);
+      if (qm) {
+        g.drawImage(itemIconCanvas(qm[1]), 0, 0);
+        const c = qm[2] === "perfect" ? ["#ffd84a", "#fff6c0"] : ["#c8d4e0", "#ffffff"];
+        px(g, 11, 0, 5, 5, "#2a1a0a"); px(g, 12, 1, 3, 3, c[0]); px(g, 13, 0, 1, 5, c[0]); px(g, 11, 2, 5, 1, c[0]); px(g, 13, 2, 1, 1, c[1]);
+        return;
+      }
+      const yarnBall = (a, b, c) => { px(g, 3, 3, 10, 10, a); px(g, 4, 2, 8, 12, a); px(g, 2, 4, 12, 8, a); px(g, 4, 4, 3, 2, b); px(g, 5, 6, 7, 1, c); px(g, 4, 9, 8, 1, c); };
+      const gem = (a, b, c) => { px(g, 5, 3, 6, 2, b); px(g, 3, 5, 10, 3, a); px(g, 4, 8, 8, 2, a); px(g, 6, 10, 4, 2, c); px(g, 7, 12, 2, 1, c); px(g, 5, 5, 2, 2, b); sparkle(); };
+      if (id === "rose_yarn") { yarnBall("#ff8ab8", "#ffd6e8", "#d0507e"); sparkle(); return; }
+      if (id === "sky_yarn") { yarnBall("#5ab4f0", "#c8ecff", "#2a78b8"); sparkle(); return; }
+      if (id === "rainbow_yarn") { px(g, 3, 3, 10, 10, "#e8578a"); px(g, 4, 2, 8, 12, "#e8578a"); px(g, 2, 4, 12, 8, "#e8578a"); px(g, 2, 5, 12, 2, "#f0a040"); px(g, 2, 7, 12, 2, "#f0e050"); px(g, 2, 9, 12, 2, "#60c060"); px(g, 3, 11, 10, 2, "#5a8af0"); px(g, 4, 2, 8, 1, "#a060d0"); sparkle(); return; }
+      if (id === "sapphire") { gem("#3a6ae0", "#a8c4ff", "#1a3a90"); return; }
+      if (id === "ruby") { gem("#d0303a", "#ffb0b0", "#801820"); return; }
+      if (id === "emerald") { gem("#30b060", "#b0f0c8", "#16602e"); return; }
+      if (id === "pearl") { px(g, 5, 5, 6, 6, "#f4eee6"); px(g, 4, 6, 8, 4, "#f4eee6"); px(g, 6, 4, 4, 8, "#f4eee6"); px(g, 6, 6, 2, 2, "#ffffff"); px(g, 9, 9, 2, 2, "#c8bcae"); sparkle(); return; }
+      if (id === "old_boot") { px(g, 4, 2, 6, 9, "#6b4a2a"); px(g, 4, 10, 10, 4, "#6b4a2a"); px(g, 4, 13, 11, 1, "#3a2814"); px(g, 5, 2, 4, 1, "#8a6a42"); px(g, 6, 5, 3, 1, "#c8b890"); px(g, 6, 7, 3, 1, "#c8b890"); px(g, 11, 9, 1, 1, "#5aa0e6"); px(g, 12, 7, 1, 1, "#5aa0e6"); return; }
+      if (id === "message_bottle") { px(g, 4, 6, 9, 7, "#5aa880"); px(g, 3, 7, 11, 5, "#5aa880"); px(g, 12, 8, 3, 3, "#5aa880"); px(g, 14, 8, 1, 3, "#8a5a33"); px(g, 5, 8, 6, 3, "#f3ead6"); px(g, 6, 9, 4, 1, "#a09382"); px(g, 4, 6, 4, 1, "#9ad8b8"); return; }
+      if (id === "bird_nest") { px(g, 2, 8, 12, 5, "#8a6438"); px(g, 3, 7, 10, 1, "#a8804a"); px(g, 3, 12, 10, 2, "#6b4a2a"); for (const [x, y] of [[3, 9], [7, 10], [11, 9], [5, 11], [9, 12]]) px(g, x, y, 2, 1, "#c8a060"); px(g, 5, 6, 3, 3, "#e8f0f8"); px(g, 8, 6, 3, 3, "#c8e0f0"); return; }
+      if (id === "tree_seed") { px(g, 6, 4, 4, 8, "#9a6a32"); px(g, 5, 6, 6, 4, "#9a6a32"); px(g, 7, 5, 1, 3, "#c8925a"); px(g, 8, 1, 1, 3, "#5aa040"); px(g, 9, 1, 3, 2, "#7fc050"); return; }
+      if (id === "burnt_fish") { px(g, 1, 11, 14, 3, "#f3ead6"); px(g, 1, 13, 14, 1, "#c8b890"); drawFish(g, "#2a2420", "#4a3a30", false); px(g, 6, 2, 1, 2, "#9a9a9a"); px(g, 9, 1, 1, 3, "#9a9a9a"); return; }
       if (id === "lucky_cat_gem") { px(g, 4, 5, 8, 8, "#3fbf74"); px(g, 3, 6, 10, 6, "#3fbf74"); px(g, 4, 3, 2, 2, "#3fbf74"); px(g, 10, 3, 2, 2, "#3fbf74"); px(g, 5, 6, 3, 2, "#a4f0c0"); px(g, 6, 8, 1, 1, "#1f5a36"); px(g, 9, 8, 1, 1, "#1f5a36"); px(g, 4, 12, 8, 1, "#1f7a46"); sparkle(); return; }
       if (id === "golden_bamboo") { px(g, 6, 1, 3, 14, "#e6b84a"); px(g, 6, 1, 1, 14, "#fff0a8"); px(g, 5, 5, 5, 1, "#9a7420"); px(g, 5, 10, 5, 1, "#9a7420"); px(g, 9, 3, 3, 1, "#c8962a"); sparkle(); return; }
       if (id === "golden_yarn") { px(g, 3, 3, 10, 10, "#e6b84a"); px(g, 4, 2, 8, 12, "#e6b84a"); px(g, 2, 4, 12, 8, "#e6b84a"); px(g, 4, 4, 3, 2, "#fff0a8"); px(g, 5, 6, 7, 1, "#9a7420"); px(g, 4, 9, 8, 1, "#9a7420"); sparkle(); return; }

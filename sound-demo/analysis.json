@@ -1,0 +1,112 @@
+[
+ {
+  "file": "ambient-birds-crickets.wav",
+  "secs": 3.0,
+  "peak_dbfs": -29.5,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -42.3,
+  "max_400ms_rms_dbfs": -48.2,
+  "crest_db": 12.8,
+  "dc": 0.0,
+  "kb": 516
+ },
+ {
+  "file": "music-day-30s.wav",
+  "secs": 30.0,
+  "peak_dbfs": -3.1,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -18.4,
+  "max_400ms_rms_dbfs": -14.7,
+  "crest_db": 15.3,
+  "dc": 0.0,
+  "kb": 5168
+ },
+ {
+  "file": "music-night-30s.wav",
+  "secs": 30.0,
+  "peak_dbfs": -4.2,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -18.4,
+  "max_400ms_rms_dbfs": -15.6,
+  "crest_db": 14.3,
+  "dc": 5e-05,
+  "kb": 5168
+ },
+ {
+  "file": "sfx-combat.wav",
+  "secs": 3.0,
+  "peak_dbfs": -11.3,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -27.5,
+  "max_400ms_rms_dbfs": -26.6,
+  "crest_db": 16.2,
+  "dc": -0.00017,
+  "kb": 516
+ },
+ {
+  "file": "sfx-fishing.wav",
+  "secs": 4.0,
+  "peak_dbfs": -15.9,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -31.1,
+  "max_400ms_rms_dbfs": -29.2,
+  "crest_db": 15.2,
+  "dc": 5e-05,
+  "kb": 689
+ },
+ {
+  "file": "sfx-jingles-meow.wav",
+  "secs": 6.0,
+  "peak_dbfs": -10.9,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -29.7,
+  "max_400ms_rms_dbfs": -25.3,
+  "crest_db": 18.8,
+  "dc": -0.0,
+  "kb": 1033
+ },
+ {
+  "file": "sfx-mining.wav",
+  "secs": 3.0,
+  "peak_dbfs": -11.5,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -30.3,
+  "max_400ms_rms_dbfs": -28.5,
+  "crest_db": 18.8,
+  "dc": 0.0,
+  "kb": 516
+ },
+ {
+  "file": "sfx-smith-cook.wav",
+  "secs": 4.0,
+  "peak_dbfs": -12.3,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -32.0,
+  "max_400ms_rms_dbfs": -30.5,
+  "crest_db": 19.7,
+  "dc": 3e-05,
+  "kb": 689
+ },
+ {
+  "file": "sfx-ui.wav",
+  "secs": 3.5,
+  "peak_dbfs": -16.5,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -31.5,
+  "max_400ms_rms_dbfs": -30.7,
+  "crest_db": 15.0,
+  "dc": 1e-05,
+  "kb": 602
+ },
+ {
+  "file": "sfx-woodcutting.wav",
+  "secs": 3.0,
+  "peak_dbfs": -11.3,
+  "clipped_samples": 0,
+  "rms_active_dbfs": -26.7,
+  "max_400ms_rms_dbfs": -28.8,
+  "crest_db": 15.4,
+  "dc": -0.00025,
+  "kb": 516
+ }
+]

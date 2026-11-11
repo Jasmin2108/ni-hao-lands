@@ -20,6 +20,7 @@ const {
   combatLevel, equipmentBonuses,
 } = world;
 const leaderboard = require("./leaderboard");
+const MG = require("./minigames");
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -54,6 +55,15 @@ const CHAT_WINDOW_MS = 15000;
 const CHAT_WINDOW_MAX = 6;
 const INV_SIZE = 28;
 const PLAYER_HP = 20;
+// Mob aggro / leash. Mobs only aggro when attacked; these rules make sure they let go.
+const AGGRO_GRACE_MS = 45000;   // after a death, mobs won't re-aggro that player for this long
+const MOB_LEASH = 9;            // max tiles a mob will stray from its home while chasing
+const MOB_GIVEUP = 7;           // drop the chase when the target is this far away
+const MOB_CHASE_MAX = 16;       // or after chasing this many tiles in one go
+const MOB_SPEED = 2.4;          // tiles/s, deliberately slower than WALK_SPEED so players can escape
+const MOB_RETURN_SPEED = 3.2;   // walking home after a reset (still <= WALK_SPEED)
+const SAFE_RESPAWN_RADIUS = 10; // no live mob may be this close to the respawn tile
+const TEST_HOOKS = process.env.NHL_TEST_HOOKS === "1";
 const VIEW_RADIUS = 40;
 const STEP_WINDOW_MS = 1000;
 const STEP_WINDOW_MAX = 20; // keyboard/joystick step intents per second (excess is dropped)
@@ -305,6 +315,8 @@ let mobs = staticWorld.mobs.map((m) => ({
   homeY: m.y,
 }));
 
+computeFishAlts();
+
 /** ws -> live session */
 const sessions = new Map();
 const chatLog = [];
@@ -333,6 +345,8 @@ function hydrateAccount(a) {
   a.periods = leaderboard.normalizePeriods(a.periods);
   a.lastRenamedAt = Math.max(0, Number(a.lastRenamedAt) || 0);
   a.quests = normalizeQuests(a.quests);
+  a.daily = a.daily && typeof a.daily === "object" ? a.daily : null;
+  a.bestStreak = Math.max(0, a.bestStreak | 0);
   if (a.equipped && a.equipped.hat && !a.equipped.head) {
     a.equipped.head = a.equipped.hat;
     delete a.equipped.hat;
@@ -394,6 +408,8 @@ function snapshot(s) {
     periods: a.periods || leaderboard.normalizePeriods(null),
     lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0),
     quests: a.quests || normalizeQuests(null),
+    daily: a.daily || null,
+    bestStreak: Math.max(0, a.bestStreak | 0),
     created: a.created,
   };
 }
@@ -542,6 +558,18 @@ function invAdd(inv, itemId, qty = 1) {
   return true;
 }
 
+// Quest hand-ins accept fine / perfect variants of an item; plain ones are used up first.
+function variantIds(itemId) { return [itemId, itemId + "_fine", itemId + "_perfect"].filter((id) => ITEMS[id]); }
+function invCountAny(inv, itemId) { return variantIds(itemId).reduce((t, id) => t + invCount(inv, id), 0); }
+function invRemoveAny(inv, itemId, qty = 1) {
+  let left = qty;
+  for (const id of variantIds(itemId)) {
+    const take = Math.min(left, invCount(inv, id));
+    if (take > 0 && invRemove(inv, id, take)) left -= take;
+    if (!left) break;
+  }
+  return left === 0;
+}
 function invRemove(inv, itemId, qty = 1) {
   qty = qty | 0;
   if (invCount(inv, itemId) < qty) return false;
@@ -599,8 +627,55 @@ function mePayload(s) {
     combatLevel: combatLevel(s.account),
     bonuses: equipmentBonuses(s.account),
     nihalaStatus: nihalaStatusPayload(s),
+    streak: s.streak || 0,
+    bestStreak: s.account.bestStreak || 0,
+    daily: dailyPayload(s),
+    graceUntil: s.graceUntil && s.graceUntil > Date.now() ? s.graceUntil - Date.now() : 0,
   };
 }
+
+// ---- daily tasks board (same 3 tasks for everyone per UTC day) ----
+let dailyCache = { day: "", tasks: [] };
+function todaysTasks() {
+  const day = MG.dayKey();
+  if (dailyCache.day !== day) dailyCache = { day, tasks: MG.dailyTasksFor(day) };
+  return dailyCache;
+}
+function dailyState(s) {
+  const { day } = todaysTasks();
+  if (!s.account.daily || s.account.daily.day !== day) s.account.daily = MG.normalizeDaily(s.account.daily, day);
+  return s.account.daily;
+}
+function dailyPayload(s) {
+  const d = dailyState(s);
+  return {
+    day: d.day,
+    tasks: todaysTasks().tasks.map((t) => ({ id: t.id, label: t.label, goal: t.goal, gold: t.gold, xp: t.xp, prog: Math.min(t.goal, d.prog[t.id] || 0), done: !!d.done[t.id] })),
+  };
+}
+function dailyBump(s, id, n = 1) {
+  if (!n) return;
+  const d = dailyState(s);
+  const task = todaysTasks().tasks.find((t) => t.id === id);
+  if (!task || d.done[id]) return;
+  d.prog[id] = (d.prog[id] || 0) + n;
+  persist.markDirty();
+  if (d.prog[id] < task.goal) return;
+  d.done[id] = true;
+  s.account.gold += task.gold;
+  leaderboard.addPeriodGold(s.account, task.gold);
+  for (const [sk, amt] of Object.entries(task.xp || {})) giveXp(s, sk, amt);
+  toast(s, `Daily task done: ${task.label}! +${task.gold} gold.`);
+  send(s.ws, { type: "fx", kind: "task", id, x: s.x, y: s.y, onMe: true });
+}
+
+// ---- streaks for good timings ----
+function streakUp(s) {
+  s.streak = (s.streak || 0) + 1;
+  if (s.streak > (s.account.bestStreak || 0)) { s.account.bestStreak = s.streak; persist.markDirty(); }
+  dailyBump(s, "timing", 1);
+}
+function streakReset(s) { s.streak = 0; }
 
 // ---------- $nihala holder perks ----------
 function isNihalaHolder(s) {
@@ -757,12 +832,12 @@ function sendDelta(s, everyone, pub, allNodes, allMobs, now) {
     }
   }
   for (const id of sent.p.keys()) if (!seenP.has(id)) { (msg.pr || (msg.pr = [])).push(id); sent.p.delete(id); any = true; }
-  // nodes: positions are static, only depletion/charges change (wider radius for the minimap)
+  // nodes: depletion/charges change; fishing spots also move on respawn (wider radius for the minimap)
   const seenN = new Set();
   for (const e of allNodes) {
     if (Math.abs(e.x - s.x) > VIEW_RADIUS || Math.abs(e.y - s.y) > VIEW_RADIUS) continue;
     seenN.add(e.id);
-    const key = e.depleted + "," + e.charges;
+    const key = e.depleted + "," + e.charges + "," + e.x + "," + e.y;
     if (sent.n.get(e.id) !== key) { (msg.n || (msg.n = [])).push(e); sent.n.set(e.id, key); any = true; }
   }
   for (const id of sent.n.keys()) if (!seenN.has(id)) { (msg.nr || (msg.nr = [])).push(id); sent.n.delete(id); any = true; }
@@ -863,7 +938,7 @@ function gatherDuration(s, node) {
 }
 
 function canStartGather(s, node) {
-  if (!node || node.type === "range" || node.type === "furnace" || node.type === "anvil") return "Nothing happens.";
+  if (!node || node.type === "range" || node.type === "furnace" || node.type === "anvil" || node.type === "board") return "Nothing happens.";
   if (node.depleted || (node.charges || 0) <= 0) return "Nothing there right now.";
   const need = node.level || 1;
   if (need > 1 && skillLevelOf(s.account, node.skill) < need) {
@@ -932,12 +1007,12 @@ function talkQuest(s, npc) {
     return true;
   }
   const need = quest.need || {};
-  const missing = Object.entries(need).filter(([id, qty]) => invCount(s.account.inventory, id) < qty);
+  const missing = Object.entries(need).filter(([id, qty]) => invCountAny(s.account.inventory, id) < qty);
   if (missing.length) {
     toast(s, quest.waiting);
     return true;
   }
-  for (const [id, qty] of Object.entries(need)) invRemove(s.account.inventory, id, qty);
+  for (const [id, qty] of Object.entries(need)) invRemoveAny(s.account.inventory, id, qty);
   const reward = quest.reward || {};
   if (reward.gold) {
     s.account.gold += reward.gold;
@@ -1039,6 +1114,14 @@ function rawFishOptions(account) {
 
 function beginNode(s, node, extra) {
   extra = extra || {};
+  if (node.type === "board") {
+    const d = dailyPayload(s);
+    const left = d.tasks.filter((t) => !t.done).length;
+    toast(s, left ? `Daily tasks: ${left} left today. Rewards are paid automatically.` : "All daily tasks done today. New ones at 00:00 UTC.");
+    send(s.ws, { type: "me", me: mePayload(s) });
+    send(s.ws, { type: "open", panel: "quests" });
+    return;
+  }
   if (node.type === "range") {
     const opts = rawFishOptions(s.account).filter((o) => skillLevelOf(s.account, "cooking") >= o.level);
     if (!opts.length) {
@@ -1078,8 +1161,16 @@ function beginNode(s, node, extra) {
   toast(s, `You start ${sk ? sk.verb : "working"}...`);
 }
 
+function pickWeighted(list) {
+  let r = Math.random() * list.reduce((t, e) => t + e[1], 0);
+  for (const [id, w] of list) { r -= w; if (r <= 0) return id; }
+  return list[list.length - 1][0];
+}
 function finishGather(s, node) {
-  if (!node || node.type === "range" || node.type === "furnace" || node.type === "anvil") return;
+  if (!node || node.type === "range" || node.type === "furnace" || node.type === "anvil" || node.type === "board") return;
+  const bonus = (s.action && s.action.bonus) || null;
+  if (s.action) s.action.bonus = null;
+  const good = !!(bonus && bonus.ok);
   const err = canStartGather(s, node);
   if (err) { toast(s, err); cancelAction(s); return; }
   if (!invAdd(s.account.inventory, node.item, 1)) {
@@ -1087,24 +1178,62 @@ function finishGather(s, node) {
     cancelAction(s);
     return;
   }
-  giveXp(s, node.skill, node.xp || 20);
   node.charges = Math.max(0, (node.charges || 1) - 1);
   const item = ITEMS[node.item];
+  let xp = node.xp || 20;
   let note = `You get ${item ? item.name : node.item}.`;
+  const extras = [];
+  const addExtra = (id, qty = 1) => { let got = 0; for (let i = 0; i < qty; i++) if (invAdd(s.account.inventory, id, 1)) got++; if (got) extras.push(got > 1 ? `${got}× ${ITEMS[id] ? ITEMS[id].name : id}` : (ITEMS[id] ? ITEMS[id].name : id)); return got; };
+  let shower = false, rareFind = false;
+  const sk = node.skill;
   if ((node.item && String(node.item).startsWith("raw_")) || node.type === "fish") {
-    const kg = rollFishKg(node.resource);
+    let kg = rollFishKg(node.resource);
+    if (good) { kg = Math.round(kg * 1.35 * 10) / 10; xp *= 2; }
     leaderboard.addPeriodFish(s.account, kg);
     const prev = Number(s.account.biggestFish) || 0;
-    if (kg > prev) {
-      s.account.biggestFish = kg;
-      note = `You catch a ${kg.toFixed(1)} kg ${item ? item.name.replace(/^Raw /, "") : "fish"} — new personal best!`;
-    } else {
-      note = `You catch a ${kg.toFixed(1)} kg ${item ? item.name.replace(/^Raw /, "") : "fish"}.`;
+    const fishName = item ? item.name.replace(/^Raw /, "") : "fish";
+    if (kg > prev) { s.account.biggestFish = kg; note = `You catch a ${kg.toFixed(1)} kg ${fishName} — new personal best!`; }
+    else note = `You catch a ${kg.toFixed(1)} kg ${fishName}.`;
+    if (good) note = "Perfect strike! " + note + " (2× xp)";
+    if (good && Math.random() < 0.2) addExtra(node.item, 1);
+    if (good && Math.random() < 0.04) { addExtra("raw_moon_koi", 1); rareFind = true; }
+    if (Math.random() < (good ? 0.07 : 0.04)) {
+      const t = pickWeighted([["old_boot", 45], ["message_bottle", 35], ["pearl", 20]]);
+      addExtra(t, 1);
+      if (t === "old_boot") note += " ...and an old boot. Classic.";
+      else rareFind = true;
     }
+    dailyBump(s, "fish", 1);
+  } else if (sk === "mining") {
+    if (good) {
+      xp *= 1.5;
+      addExtra(node.item, 1);
+      note = "Weak point! " + note;
+      if ((s.streak || 0) >= 3 && Math.random() < 0.3) { shower = true; addExtra(node.item, 2); note += " Rock shower!"; }
+    }
+    if (Math.random() < (good ? 0.04 : 0.015)) { addExtra(pickWeighted([["sapphire", 50], ["emerald", 30], ["ruby", 20]]), 1); rareFind = true; }
+    dailyBump(s, "ore", 1 + (good ? 1 : 0) + (shower ? 2 : 0));
+  } else if (sk === "woodcutting") {
+    let logs = 1;
+    if (good) {
+      xp *= 1.5;
+      if (Math.random() < 0.35) logs += addExtra(node.item, 1);
+      note = `Clean chop! (combo ${s.streak || 1}) ` + note;
+      if ((s.streak || 0) > 0 && s.streak % 5 === 0) { logs += addExtra(node.item, 2); note += " Timber combo!"; shower = true; }
+    }
+    if (Math.random() < 0.025) { addExtra("bird_nest", 1); rareFind = true; }
+    else if (Math.random() < 0.03) addExtra("tree_seed", 1);
+    dailyBump(s, "logs", logs);
+  } else if (sk === "yarn") {
+    if (Math.random() < 0.06) { addExtra(pickWeighted([["rose_yarn", 40], ["sky_yarn", 40], ["rainbow_yarn", 20]]), 1); rareFind = true; }
+    dailyBump(s, "yarn", 1);
   }
+  giveXp(s, node.skill, Math.round(xp * (good ? MG.comboMult(s.streak) : 1)));
+  if (extras.length) note += ` Bonus: ${extras.join(", ")}.`;
   toast(s, note);
   const rare = rollHolderDrop(s, node);
   if (rare) toast(s, rare);
+  send(s.ws, { type: "fx", kind: "gather", skill: sk, good, shower, rare: rareFind || !!rare, x: node.x, y: node.y, node: node.id, onMe: true });
   send(s.ws, { type: "me", me: mePayload(s) });
   if (node.charges > 0) {
     const nextErr = canStartGather(s, node);
@@ -1114,7 +1243,86 @@ function finishGather(s, node) {
   }
   node.depleted = true;
   node.respawnAt = Date.now() + (node.respawn || 15000);
+  if (node.type === "fish") toast(s, "The fish scatter. The spot will reappear somewhere nearby.");
   cancelAction(s);
+}
+
+// Fishing spots drift: each respawn picks one of the shore tiles near the original spot.
+function computeFishAlts() {
+  const isW = (x, y) => { const t = tiles[y] && tiles[y][x]; return t === "water" || t === "deepwater"; };
+  const npcAt = (x, y) => staticWorld.npcs.some((n) => n.x === x && n.y === y);
+  for (const n of nodes) {
+    if (n.type !== "fish") continue;
+    n.homeX = n.x; n.homeY = n.y;
+    const z = zoneAt(n.x, n.y).id;
+    const alts = [{ x: n.x, y: n.y }];
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const x = n.x + dx, y = n.y + dy;
+      if ((!dx && !dy) || !isWalkable(tiles, x, y) || npcAt(x, y)) continue;
+      if (!(isW(x + 1, y) || isW(x - 1, y) || isW(x, y + 1) || isW(x, y - 1))) continue;
+      if (zoneAt(x, y).id !== z) continue;
+      if (nodes.some((o) => o !== n && o.x === x && o.y === y)) continue;
+      alts.push({ x, y });
+    }
+    n.alts = alts;
+  }
+}
+function relocateFishSpot(n) {
+  const free = n.alts.filter((a) => !nodes.some((o) => o !== n && o.x === a.x && o.y === a.y) && !(a.x === n.x && a.y === n.y));
+  if (!free.length) return;
+  const a = free[Math.floor(Math.random() * free.length)];
+  n.x = a.x; n.y = a.y;
+}
+
+// ---- timing chances: server plans a window per action cycle and judges taps by its own clock ----
+function ensureChance(s, now) {
+  const a = s.action;
+  const ch = s.chance;
+  if (ch && !ch.resolved && now > ch.closeAt + MG.SLACK_MS + MG.MAX_COMP_MS) {
+    ch.resolved = true;
+    if (ch.kind !== "heat") { streakReset(s); send(s.ws, { type: "chanceEnd", id: ch.id, ok: false, missed: true, streak: 0 }); }
+  }
+  if (!a || !(a.kind === "gather" || a.kind === "cook" || a.kind === "smith")) {
+    if (ch && !ch.resolved) { ch.resolved = true; send(s.ws, { type: "chanceEnd", id: ch.id, ok: false, cancelled: true, streak: s.streak || 0 }); }
+    if (ch && ch.resolved) s.chance = null;
+    return;
+  }
+  if (a.chanceFor === a.next) return;
+  a.chanceFor = a.next;
+  let next = null;
+  if (a.kind === "gather") {
+    const node = nodes.find((n) => n.id === a.target);
+    const kind = node && MG.kindForSkill(node.skill);
+    if (kind) next = MG.planGather(kind, now, a.next, Math.random, s.testChanceRate);
+    if (next) next.node = node.id;
+  } else {
+    next = MG.planHeat(now, a.next);
+  }
+  if (ch && !ch.resolved) { ch.resolved = true; if (ch.kind !== "heat") streakReset(s); }
+  s.chance = next;
+  if (next) send(s.ws, { type: "chance", ...MG.publicChance(next, now) });
+}
+
+function onHit(s, id) {
+  const now = Date.now();
+  const ch = s.chance;
+  if (!ch || ch.id !== id || ch.resolved || !s.action) return;
+  ch.resolved = true;
+  let ok, quality = null;
+  if (ch.kind === "heat") {
+    quality = MG.judgeHeat(ch, now, s.rtt).quality;
+    ok = quality !== "poor";
+  } else {
+    ok = MG.judgeGather(ch, now, s.rtt);
+  }
+  if (ok) streakUp(s); else streakReset(s);
+  s.action.bonus = { ok, quality };
+  if (ok || ch.kind === "heat") {
+    // a good tap lands the catch / finishes the craft right away; a heat tap always finishes it
+    s.action.next = Math.min(s.action.next, now + 150);
+    s.action.chanceFor = s.action.next;
+  }
+  send(s.ws, { type: "chanceEnd", id, ok, quality, kind: ch.kind, streak: s.streak || 0 });
 }
 
 function finishCook(s) {
@@ -1135,14 +1343,30 @@ function finishCook(s) {
     cancelAction(s);
     return;
   }
-  if (!invAdd(s.account.inventory, raw.cook, 1)) {
+  const bonus = (s.action && s.action.bonus) || null;
+  if (s.action) s.action.bonus = null;
+  const q = bonus && bonus.quality;
+  const lvlDelta = skillLevelOf(s.account, "cooking") - (raw.cookLevel || 1);
+  // Burnt food only on a badly-timed tap while still low level for that fish; AFK cooking never burns.
+  const burnt = q === "poor" && lvlDelta < 10 && Math.random() < 0.6;
+  const outId = burnt ? "burnt_fish" : (q === "fine" || q === "perfect") && ITEMS[raw.cook + "_" + q] ? raw.cook + "_" + q : raw.cook;
+  if (!invAdd(s.account.inventory, outId, 1)) {
     invAdd(s.account.inventory, rawId, 1);
     toast(s, "Your inventory is full.");
     cancelAction(s);
     return;
   }
-  giveXp(s, "cooking", raw.cookXp || 24);
-  toast(s, `You cook ${ITEMS[raw.cook] ? ITEMS[raw.cook].name : raw.cook}.`);
+  if (burnt) {
+    giveXp(s, "cooking", Math.round((raw.cookXp || 24) * 0.2));
+    toast(s, "Too hot! You burn it. (Better timing, or more Cooking levels, stop burning.)");
+    send(s.ws, { type: "fx", kind: "craft", quality: "burnt", x: s.x, y: s.y, onMe: true });
+  } else {
+    const mult = q === "perfect" ? 1.5 : q === "fine" ? 1.2 : 1;
+    giveXp(s, "cooking", Math.round((raw.cookXp || 24) * mult * (q === "fine" || q === "perfect" ? MG.comboMult(s.streak) : 1)));
+    toast(s, `You cook ${ITEMS[outId] ? ITEMS[outId].name : outId}.${q === "perfect" ? " Perfect!" : q === "fine" ? " Nicely done." : ""}`);
+    dailyBump(s, "cook", 1);
+    send(s.ws, { type: "fx", kind: "craft", quality: q || "normal", x: s.x, y: s.y, onMe: true });
+  }
   send(s.ws, { type: "me", me: mePayload(s) });
   const next = rawFishOptions(s.account).find((o) => skillLevelOf(s.account, "cooking") >= o.level);
   if (next && s.action) {
@@ -1166,15 +1390,21 @@ function finishCraft(s, list, verb) {
     cancelAction(s);
     return;
   }
-  if (!invAdd(s.account.inventory, recipe.product, 1)) {
+  const bonus = (s.action && s.action.bonus) || null;
+  if (s.action) s.action.bonus = null;
+  const q = verb === "smith" && bonus && (bonus.quality === "fine" || bonus.quality === "perfect") ? bonus.quality : null;
+  const outId = q && ITEMS[recipe.product + "_" + q] ? recipe.product + "_" + q : recipe.product;
+  if (!invAdd(s.account.inventory, outId, 1)) {
     restoreInputs(s.account, recipe);
     toast(s, "Your inventory is full.");
     cancelAction(s);
     return;
   }
-  giveXp(s, "smithing", recipe.xp || 20);
-  const def = ITEMS[recipe.product];
-  toast(s, `You ${verb} a ${def ? def.name : recipe.product}.`);
+  giveXp(s, "smithing", Math.round((recipe.xp || 20) * (q === "perfect" ? 1.5 : q === "fine" ? 1.2 : 1) * (q ? MG.comboMult(s.streak) : 1)));
+  dailyBump(s, "smith", 1);
+  const def = ITEMS[outId];
+  toast(s, `You ${verb} a ${def ? def.name : outId}.${q === "perfect" ? " Perfect strike!" : q === "fine" ? " Fine work." : ""}`);
+  send(s.ws, { type: "fx", kind: "craft", verb, quality: q || "normal", x: s.x, y: s.y, onMe: true });
   send(s.ws, { type: "me", me: mePayload(s) });
   const next = pickRecipe(s.account, list, recipe.id || recipe.product);
   if (next && s.action) {
@@ -1201,7 +1431,10 @@ function combatTick(s, now) {
   const bonus = equipmentBonuses(s.account);
   const dmg = Math.max(1, 2 + Math.floor(Math.random() * 3) + Math.floor(skillLevelOf(s.account, "combat") / 8) + (bonus.atk || 0) - Math.floor((mob.level || 1) / 6));
   mob.hp -= dmg;
-  mob.target = s.id;
+  // Attacking is the player's choice: it ends their post-death grace for this fight.
+  s.graceUntil = 0;
+  if (mob.grace) mob.grace.delete(s.id);
+  if (!mob.returning) { if (mob.target !== s.id) mob.chased = 0; mob.target = s.id; }
   toast(s, `You hit the ${mob.name} for ${dmg}.`);
   send(s.ws, { type: "fx", kind: "hit", target: mob.id, dmg, x: mob.fx, y: mob.fy });
   if (mob.hp <= 0) {
@@ -1209,6 +1442,7 @@ function combatTick(s, now) {
     mob.hp = 0;
     mob.respawnAt = now + 20000 + (mob.level || 1) * 800;
     giveXp(s, "combat", mob.xp || 30);
+    dailyBump(s, "kill", 1);
     s.account.kills = (s.account.kills || 0) + 1;
     leaderboard.addPeriodKill(s.account);
     const lo = Array.isArray(mob.gold) ? mob.gold[0] : 5;
@@ -1232,16 +1466,68 @@ function hitPlayer(s, dmg, fromName) {
   send(s.ws, { type: "toast", text: `${fromName || "A monster"} hits you for ${dmg}.` });
   send(s.ws, { type: "fx", kind: "hit", target: s.id, dmg, x: s.x, y: s.y, onMe: true });
   if (s.hp <= 0) {
-    s.hp = PLAYER_HP;
-    s.x = staticWorld.spawn.x;
-    s.y = staticWorld.spawn.y;
-    s.path = [];
-    cancelAction(s);
-    toast(s, "You wake up back in Ni Hao Village. (Prototype: you keep your items.)");
-    send(s.ws, { type: "me", me: mePayload(s) });
+    onPlayerDeath(s);
   } else {
     send(s.ws, { type: "me", me: mePayload(s) });
   }
+}
+
+// Every mob that was on this player lets go, walks home, and leaves them alone for a while.
+function dropAggroOn(playerId, now, graceMs) {
+  for (const m of mobs) {
+    if (m.target !== playerId) continue;
+    m.target = null;
+    sendMobHome(m);
+    if (graceMs) (m.grace || (m.grace = new Map())).set(playerId, now + graceMs);
+  }
+}
+function sendMobHome(m) {
+  m.target = null;
+  m.returning = true;
+  m.chased = 0;
+  m.path = pathfind(tiles, m.fx, m.fy, m.homeX, m.homeY, 80);
+  if (!m.path.length && (Math.abs(m.fx - m.homeX) > 0.01 || Math.abs(m.fy - m.homeY) > 0.01)) {
+    m.fx = m.x = m.homeX;
+    m.fy = m.y = m.homeY;
+  }
+}
+function mobIgnores(m, s, now) {
+  if (s.graceUntil && now < s.graceUntil) return true;
+  const g = m.grace && m.grace.get(s.id);
+  return !!(g && now < g);
+}
+function safeRespawnPoint() {
+  const sp = staticWorld.spawn;
+  const unsafe = (x, y) => mobs.some((m) => m.alive && Math.hypot(m.fx - x, m.fy - y) < SAFE_RESPAWN_RADIUS);
+  if (!unsafe(sp.x, sp.y)) return { x: sp.x, y: sp.y };
+  for (let r = 1; r <= 8; r++) {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = sp.x + dx, y = sp.y + dy;
+      if (isWalkable(tiles, x, y) && !unsafe(x, y)) return { x, y };
+    }
+  }
+  return { x: sp.x, y: sp.y };
+}
+function onPlayerDeath(s) {
+  const now = Date.now();
+  dropAggroOn(s.id, now, AGGRO_GRACE_MS);
+  s.graceUntil = now + AGGRO_GRACE_MS;
+  const p = safeRespawnPoint();
+  s.hp = PLAYER_HP;
+  s.x = p.x;
+  s.y = p.y;
+  s.path = [];
+  s.pending = null;
+  s.stepMode = false;
+  s.nextStep = null;
+  s.chance = null;
+  streakReset(s);
+  cancelAction(s);
+  toast(s, "You wake up back in Ni Hao Village. Monsters will leave you alone for a bit. (You keep your items.)");
+  send(s.ws, { type: "fx", kind: "death", target: s.id, x: s.x, y: s.y, onMe: true });
+  send(s.ws, { type: "me", me: mePayload(s) });
+  broadcastState();
 }
 
 function shopBuy(s, itemId) {
@@ -1522,6 +1808,28 @@ function handleStep(s, msg) {
   tryStep(s, dx, dy);
 }
 
+// Test-only hooks (NHL_TEST_HOOKS=1). Never enabled in production.
+function testHook(s, msg) {
+  const op = String(msg.op || "");
+  if (op === "hp") { s.hp = Math.max(1, msg.hp | 0); send(s.ws, { type: "me", me: mePayload(s) }); }
+  else if (op === "tp") { s.x = msg.x | 0; s.y = msg.y | 0; s.path = []; broadcastState(); }
+  else if (op === "rate") s.testChanceRate = Number(msg.rate);
+  else if (op === "skill") { s.account.skills[String(msg.skill)] = Math.max(0, msg.xp | 0); send(s.ws, { type: "me", me: mePayload(s) }); }
+  else if (op === "give") { invAdd(s.account.inventory, String(msg.item), Math.max(1, msg.qty | 0)); send(s.ws, { type: "me", me: mePayload(s) }); }
+  else if (op === "mobs") {
+    const now = Date.now();
+    send(s.ws, {
+      type: "__mobs", graceLeft: s.graceUntil ? Math.max(0, s.graceUntil - now) : 0, me: { x: s.x, y: s.y, hp: s.hp },
+      mobs: mobs.map((m) => ({ id: m.id, alive: m.alive, target: m.target, returning: !!m.returning, x: m.fx, y: m.fy, homeX: m.homeX, homeY: m.homeY, hp: m.hp, grace: m.grace && m.grace.get(s.id) ? Math.max(0, m.grace.get(s.id) - now) : 0 })),
+    });
+  } else if (op === "aggro") {
+    const m = mobs.find((x) => x.id === msg.id);
+    if (m && !mobIgnores(m, s, Date.now())) { m.target = s.id; m.returning = false; m.chased = 0; }
+  } else if (op === "chance") send(s.ws, { type: "__chance", chance: s.chance ? { ...s.chance, now: Date.now() } : null, rtt: s.rtt || 0, streak: s.streak || 0 });
+  else if (op === "nodes") send(s.ws, { type: "__nodes", nodes: nodes.filter((n) => !msg.ntype || n.type === msg.ntype).map((n) => ({ id: n.id, type: n.type, x: n.x, y: n.y, depleted: n.depleted, charges: n.charges, alts: n.alts ? n.alts.length : 0, skill: n.skill, resource: n.resource })) });
+  else if (op === "respawnNodes") { for (const n of nodes) if (n.depleted) n.respawnAt = 1; }
+}
+
 function onMessage(ws, raw) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
@@ -1550,6 +1858,20 @@ function onMessage(ws, raw) {
     }
     case "step":
       handleStep(s, msg);
+      break;
+    case "hit":
+      onHit(s, msg.id | 0);
+      break;
+    case "pong":
+      // RTT from the server's own timestamps; only the latest ping is accepted.
+      if (s.pingT && msg.t === s.pingT) {
+        const rtt = Date.now() - s.pingT;
+        s.pingT = 0;
+        if (rtt >= 0 && rtt < 5000) s.rtt = s.rtt ? Math.round(s.rtt * 0.7 + rtt * 0.3) : rtt;
+      }
+      break;
+    case "__test":
+      if (TEST_HOOKS) testHook(s, msg);
       break;
     case "interact":
       if (typeof msg.id === "string") interact(s, msg.id, msg);
@@ -1687,6 +2009,7 @@ function tick(dt, now) {
         changed = true;
       }
     }
+    ensureChance(s, now);
   }
 
   for (const n of nodes) {
@@ -1694,6 +2017,7 @@ function tick(dt, now) {
       n.depleted = false;
       n.respawnAt = 0;
       n.charges = n.maxCharges || 1;
+      if (n.type === "fish" && n.alts && n.alts.length > 1) relocateFishSpot(n);
       changed = true;
     }
   }
@@ -1708,23 +2032,43 @@ function tick(dt, now) {
         m.x = m.homeX;
         m.y = m.homeY;
         m.target = null;
+        m.returning = false;
+        m.chased = 0;
         m.path = [];
         changed = true;
       }
       continue;
     }
-    // aggro / attack
-    if (m.target) {
-      const victim = [...sessions.values()].find((s) => s.id === m.target);
-      if (!victim) m.target = null;
+    // aggro / attack with leash: mobs only chase a player who attacked them, never far from home.
+    if (m.returning) {
+      if ((!m.path || !m.path.length) && Math.hypot(m.fx - m.homeX, m.fy - m.homeY) < 0.05) {
+        m.returning = false;
+        m.hp = m.maxHp; // reset like a classic leash
+        changed = true;
+      } else if (!m.path || !m.path.length) sendMobHome(m);
+    } else if (m.target) {
+      let victim = null;
+      for (const vs of sessions.values()) if (vs.id === m.target) { victim = vs; break; }
+      if (!victim || mobIgnores(m, victim, now)) sendMobHome(m);
       else {
-        if (!adj(Math.round(m.fx), Math.round(m.fy), Math.round(victim.x), Math.round(victim.y))) {
-          const path = pathfind(tiles, m.fx, m.fy, Math.round(victim.x), Math.round(victim.y), 40);
-          m.path = path;
-        } else if (now >= m.nextHit) {
-          m.nextHit = now + 1400;
-          hitPlayer(victim, 1 + Math.floor(Math.random() * 3) + Math.floor((m.level || 1) / 5), m.name);
+        const homeD = Math.hypot(m.fx - m.homeX, m.fy - m.homeY);
+        const vd = Math.hypot(victim.x - m.fx, victim.y - m.fy);
+        const victimHome = Math.hypot(victim.x - m.homeX, victim.y - m.homeY);
+        if (homeD > MOB_LEASH || vd > MOB_GIVEUP || victimHome > MOB_LEASH + 2 || (m.chased || 0) > MOB_CHASE_MAX) {
+          sendMobHome(m);
           changed = true;
+        } else if (!adj(Math.round(m.fx), Math.round(m.fy), Math.round(victim.x), Math.round(victim.y))) {
+          if (now >= (m.repathAt || 0) || !m.path || !m.path.length) {
+            m.repathAt = now + 400;
+            m.path = pathfind(tiles, m.fx, m.fy, Math.round(victim.x), Math.round(victim.y), 24);
+          }
+        } else {
+          m.path = [];
+          if (now >= m.nextHit) {
+            m.nextHit = now + 1400;
+            hitPlayer(victim, 1 + Math.floor(Math.random() * 3) + Math.floor((m.level || 1) / 5), m.name);
+            changed = true;
+          }
         }
       }
     } else if (now >= m.nextWander) {
@@ -1737,9 +2081,10 @@ function tick(dt, now) {
       const step = m.path[0];
       const dx = step.x - m.fx, dy = step.y - m.fy;
       const dist = Math.hypot(dx, dy);
-      const move = 2.4 * dt;
+      const move = (m.returning ? MOB_RETURN_SPEED : MOB_SPEED) * dt;
       if (dist <= move) { m.fx = step.x; m.fy = step.y; m.path.shift(); }
       else { m.fx += (dx / dist) * move; m.fy += (dy / dist) * move; }
+      if (m.target) m.chased = (m.chased || 0) + Math.min(dist, move);
       m.x = m.fx; m.y = m.fy;
       changed = true;
     }
@@ -2077,6 +2422,11 @@ async function main() {
     tick(dt, now);
   }, TICK_MS);
   saveTimer = setInterval(() => { saveAccounts(); }, 20000);
+  // RTT probe for latency-compensated timing judgements (server timestamps only).
+  setInterval(() => {
+    const now = Date.now();
+    for (const s of sessions.values()) { s.pingT = now; send(s.ws, { type: "ping", t: now }); }
+  }, 4000);
   // periodic $nihala re-check for online wallet players (perks pause when the balance hits 0)
   setInterval(() => {
     const now = Date.now();

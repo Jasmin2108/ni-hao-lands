@@ -96,7 +96,25 @@ const ITEMS = {
   bronze_mail: { id: "bronze_mail", name: "Bronze Mail", stack: false, slot: "body", def: 3, desc: "Bronze body armor.", sell: 20 },
   iron_mail: { id: "iron_mail", name: "Iron Mail", stack: false, slot: "body", def: 6, desc: "Iron body armor.", sell: 50 },
   jade_mail: { id: "jade_mail", name: "Jade Mail", stack: false, slot: "body", def: 10, desc: "Jade body armor.", sell: 100 },
+
+  // Gathering finds (mini-game extras)
+  raw_moon_koi: { id: "raw_moon_koi", name: "Raw Moon Koi", stack: true, rare: true, desc: "A pale, glowing koi. A rare catch from a perfect bite.", sell: 30, cook: "cooked_golden_koi", cookLevel: 1, cookXp: 70, cookTime: 2600 },
+  old_boot: { id: "old_boot", name: "Old Boot", stack: true, junk: true, desc: "Someone's left boot. Still squelches. The shop takes it, barely.", sell: 1 },
+  message_bottle: { id: "message_bottle", name: "Message in a Bottle", stack: true, treasure: true, desc: "The note inside says: \"meow meow, send snacks\". Worth a few coins.", sell: 25 },
+  pearl: { id: "pearl", name: "River Pearl", stack: true, treasure: true, desc: "A smooth little pearl from the deep.", sell: 45 },
+  sapphire: { id: "sapphire", name: "Sapphire", stack: true, gem: true, desc: "A deep blue gem from a lucky swing.", sell: 30 },
+  ruby: { id: "ruby", name: "Ruby", stack: true, gem: true, desc: "A fiery red gem from a lucky swing.", sell: 40 },
+  emerald: { id: "emerald", name: "Emerald", stack: true, gem: true, desc: "A green gem from a lucky swing.", sell: 35 },
+  bird_nest: { id: "bird_nest", name: "Bird Nest", stack: true, desc: "Fell out of a tree. Empty, but cosy.", sell: 18 },
+  tree_seed: { id: "tree_seed", name: "Tree Seed", stack: true, desc: "A seed that dropped while chopping. Someday a tree.", sell: 6 },
+  rose_yarn: { id: "rose_yarn", name: "Rose Yarn", stack: true, rare: true, desc: "Rare pink yarn from a lucky bush.", sell: 16 },
+  sky_yarn: { id: "sky_yarn", name: "Sky Yarn", stack: true, rare: true, desc: "Rare blue yarn from a lucky bush.", sell: 16 },
+  rainbow_yarn: { id: "rainbow_yarn", name: "Rainbow Yarn", stack: true, rare: true, desc: "Very rare rainbow yarn. Old Maneki would love it.", sell: 40 },
+  burnt_fish: { id: "burnt_fish", name: "Burnt Fish", stack: true, desc: "Oops. Charcoal with fins.", sell: 0 },
 };
+
+// Quality variants: fine / perfect results from the heat bar at the range or anvil.
+const QUALITY = { fine: { label: "Fine", mult: 1.3 }, perfect: { label: "Perfect", mult: 1.6 } };
 
 // Backward-compatible alias: old "hat" cosmetics count as head.
 if (ITEMS.lantern_hat) ITEMS.lantern_hat.slot = "head";
@@ -173,6 +191,34 @@ const SMITH_RECIPES = [
   { product: "jade_helm", inputs: { jade_bar: 1 }, level: 33, xp: 80, time: 3200, label: "Smith jade helm" },
   { product: "jade_mail", inputs: { jade_bar: 2 }, level: 36, xp: 110, time: 3600, label: "Smith jade mail" },
 ];
+
+function addQualityVariants() {
+  const foods = Object.values(ITEMS).filter((d) => d.heal && !d.base);
+  for (const d of foods) {
+    for (const [q, Q] of Object.entries(QUALITY)) {
+      const heal = d.heal + (q === "fine" ? Math.max(2, Math.round(d.heal * 0.25)) : Math.max(4, Math.round(d.heal * 0.5)));
+      ITEMS[d.id + "_" + q] = {
+        ...d, id: d.id + "_" + q, name: Q.label + " " + d.name, base: d.id, quality: q, heal,
+        desc: `${Q.label} cooking. Eat to heal ${heal} HP.`, sell: Math.round(d.sell * Q.mult),
+      };
+    }
+  }
+  for (const r of SMITH_RECIPES) {
+    const d = ITEMS[r.product];
+    if (!d || d.base) continue;
+    for (const [q, Q] of Object.entries(QUALITY)) {
+      const bonus = q === "fine" ? 1 : 2;
+      const v = { ...d, id: d.id + "_" + q, name: Q.label + " " + d.name, base: d.id, quality: q, sell: Math.round(d.sell * Q.mult) };
+      let extra = "";
+      if (d.atk) { v.atk = d.atk + bonus; extra = ` +${bonus} attack.`; }
+      if (d.def) { v.def = d.def + bonus; extra = ` +${bonus} defence.`; }
+      if (d.tool) { v.toolSpeed = Math.round(d.toolSpeed * (q === "fine" ? 0.95 : 0.9) * 100) / 100; extra = ` ${q === "fine" ? 5 : 10}% faster.`; }
+      v.desc = `${Q.label} smithing: ${d.desc}${extra}`;
+      ITEMS[v.id] = v;
+    }
+  }
+}
+addQualityVariants();
 
 const QUESTS = [
   {
@@ -749,6 +795,7 @@ function buildWorld() {
   tiles[33][22] = "floor";
   addNode("furnace", 39, 33, { skill: "smithing", time: 2000, respawn: 0, label: "Furnace", action: "Smelt" });
   addNode("anvil", 41, 33, { skill: "smithing", time: 2200, respawn: 0, label: "Anvil", action: "Smith" });
+  addNode("board", 35, 26, { skill: null, time: 0, respawn: 0, label: "Daily tasks board", action: "Read" });
   tiles[33][39] = "floor";
   tiles[33][41] = "floor";
 

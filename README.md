@@ -112,6 +112,25 @@ The prototype keeps the live world in one Node process and writes periodically (
 - Chat is the box at the bottom of the screen.
 - Inventory: click cooked fish to eat, cosmetics to wear; right-click to deposit at the bank (you must be standing next to Banker Bao).
 - Escape cancels an action.
+- E / Space / the Use button / tapping the world lands a timing window (bobber bite, sparkle, chop ring, heat bar).
+- M mutes sound (not while typing). The speaker button under the zoom buttons mutes; the sliders button opens Music / Effects volume.
+
+## Sound
+
+All audio is synthesized in the browser with Web Audio (`public/audio.js`, about 26 KB). There are no audio files. Effects cover footsteps by surface, fishing, chopping, mining, smithing, cooking, combat, level-ups, item and quest pops, UI clicks, chat, holder sparkle, and an NPC cat meow. Pentatonic day and night music loops are rendered once after the first tap or keypress, using OfflineAudioContext when the browser is idle. Water, birds, and crickets fade in by zone and time of day. Defaults are effects 70% and music 40%, saved in localStorage (`nhl-audio`). Sound starts only after a user gesture (needed for iOS) and pauses while the tab is hidden. Voices are capped and throttled. Other players' sounds play only within 10 tiles and quieter. `sound-demo/analysis.json` holds the offline-render loudness check (the WAVs are gitignored).
+
+## Gathering mini-games, dailies, and mob rules
+
+- Timing windows are planned and judged by the server (`minigames.js`). The client only sends `hit`. The server judges it with its own clock, allowing up to 150 ms for half the measured ping. A good tap finishes the cycle early with a bonus. A miss is no worse than AFK, so auto-repeat still works.
+- Fishing: tap when the bobber dips for 2× xp, a heavier fish, sometimes an extra fish, a rare Moon Koi, or treasure (old boot, message bottle, pearl). Fish spots run out and move to nearby water.
+- Mining: tap the sparkle weak point for extra ore, gems (sapphire, ruby, emerald), and rock-shower combos. Rocks visibly crumble and come back.
+- Woodcutting: tap when the ring closes for rhythm chops, extra logs, bird nests, and seeds. Trees fall and regrow.
+- Cooking and smithing: a heat bar gives normal, fine, or perfect quality. Fine and perfect food heals more. Fine and perfect gear gets +1 or +2 attack/defence, and tools work 5% or 10% faster. Within 10 levels of the recipe level, a poor tap can burn food (60%). AFK never burns.
+- Yarn: rare rose, sky, and rainbow yarn.
+- Combo counter: each good tap adds +5% xp, up to +50%. The best combo is saved per account.
+- Daily tasks board in the village: 3 random tasks per UTC day with gold and xp rewards, paid automatically.
+- Mobs: speed 2.4 tiles/s, slower than walking at 4.2. They leash 9 tiles from home and give up beyond 7 tiles or after a 16-tile chase. When a player dies, every mob on them lets go and walks home. They ignore that player for 45 s, unless the player attacks first. Respawn is at a safe spot away from mobs.
+- Tests: `npm run test:aggro`, `npm run test:minigames`, `npm run test:audio` (Playwright), and `npm run test:playthrough -- https://host both` (desktop + phone end-to-end, safe on live). Server test hooks exist only with `NHL_TEST_HOOKS=1`.
 
 ## Disclaimer
 

@@ -260,6 +260,7 @@
   }
 
   function send(msg) {
+    if (msg.type === "interact" && typeof noteInteract === "function") noteInteract(msg.id);
     if (msg.type === "move" || msg.type === "interact" || msg.type === "walkThen" || msg.type === "attack" || msg.type === "stop") predCancel();
     if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(msg));
   }
@@ -317,8 +318,17 @@
       case "delta":
         applyDelta(msg);
         break;
+      case "ping":
+        if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "pong", t: msg.t }));
+        break;
+      case "chance":
+        onChance(msg);
+        break;
+      case "chanceEnd":
+        onChanceEnd(msg);
+        break;
       case "me": {
-        const prevMe = state.me ? { skills: JSON.parse(JSON.stringify(state.me.skills || {})), gold: state.me.gold } : null;
+        const prevMe = state.me ? { skills: JSON.parse(JSON.stringify(state.me.skills || {})), gold: state.me.gold, invQty: invTotal(state.me), questsDone: questsDone(state.me) } : null;
         state.me = Object.assign(state.me || {}, msg.me);
         noteMeUpdate(prevMe, state.me);
         rememberName(state.me && state.me.name);
@@ -330,7 +340,8 @@
         if (msg.kind === "hit") {
           const id = msg.onMe ? (state.me && state.me.id) : msg.target;
           fx.splats.push({ id, x: msg.x, y: msg.y, dmg: msg.dmg | 0, t0: performance.now(), ox: (Math.random() - 0.5) * 8, oy: (Math.random() - 0.5) * 4 });
-        }
+          sfx(msg.onMe ? "hurt" : (msg.dmg > 0 ? "hit" : "miss"));
+        } else onFx(msg);
         break;
       case "stepReject":
         if (msg.facing) { state.facing = msg.facing; state.facingUntil = performance.now() + 600; }
@@ -347,12 +358,14 @@
         break;
       case "chat":
         addChat(msg, true);
+        if (!state.me || msg.name !== state.me.name) sfx("chat", { vol: 0.8 });
         break;
       case "toast":
         toast(msg.text);
         break;
       case "examine":
         showExamine(msg.text);
+        if (performance.now() - (state.npcTalkAt || 0) < 6000) sfx("meow");
         break;
       case "open":
         openTab(msg.panel);
@@ -362,6 +375,7 @@
         else toast(msg.text);
         break;
       case "levelup":
+        sfx("levelup");
         showFanfare((msg.name || msg.skill) + " level " + msg.level + "!");
         break;
       case "zone":
@@ -386,6 +400,9 @@
     setText("connect-wallet", me.wallet ? "Refresh holder check" : "Sign in / link Solana wallet");
     const label = me.action ? ({ gather: "Working…", cook: "Cooking…", smelt: "Smelting…", smith: "Smithing…", combat: "Fighting…" }[me.action] || "Busy…") : "";
     setHidden("action-label", !me.action);
+    const st = MGC.streak | 0;
+    setHidden("streak", st < 2);
+    if (st >= 2) setText("streak", "Combo ×" + st);
     if (me.action) setText("action-label", label);
   }
 
@@ -600,6 +617,7 @@
       inv.appendChild(p);
     }
 
+    renderDaily(me);
     const qlist = $("quests-list");
     if (qlist) {
       const defs = state.quests || [];
@@ -938,6 +956,7 @@
   }
 
   function tapAt(clientX, clientY) {
+    if (chanceArmed(performance.now(), true)) { sendHit(); return; }
     hideContextMenu();
     const t = tileAt(clientX, clientY);
     if (!t) return;
@@ -1049,7 +1068,7 @@
   const fx = {
     warm: { pending: false, cx0: 0, cx1: 0, cy0: 0, cy1: 0, W: 0, H: 0 },
     floats: [], splats: [], particles: [], rpos: new Map(), lastFrame: 0, analyzed: null,
-    fps: 0, frames: 0, fpsT: 0, frameMs: 0, todOverride: null, lm: null, lg: null, fishWater: new Map(),
+    fps: 0, frames: 0, fpsT: 0, frameMs: 0, todOverride: null, lm: null, lg: null, fishWater: new Map(), nodeAnim: new Map(),
   };
   (() => {
     const q = new URLSearchParams(location.search);
@@ -1369,7 +1388,7 @@
   }
 
   // ---- pooled per-frame structures (no garbage in the hot path) ----
-  const K_TREE = 1, K_ORE = 2, K_LANTERN = 3, K_ROOF = 4, K_TORII = 5, K_YARN = 6, K_FURNACE = 7, K_ANVIL = 8, K_RANGE = 9, K_NPC = 10, K_MOB = 11, K_PLAYER = 12;
+  const K_TREE = 1, K_ORE = 2, K_LANTERN = 3, K_ROOF = 4, K_TORII = 5, K_YARN = 6, K_FURNACE = 7, K_ANVIL = 8, K_RANGE = 9, K_NPC = 10, K_MOB = 11, K_PLAYER = 12, K_BOARD = 13;
   const DL = { items: [], n: 0 };
   const LP = { items: [], n: 0 };
   const TG = { items: [], n: 0 };
@@ -1409,14 +1428,37 @@
     switch (it.kind) {
       case K_TREE: {
         const kd = it.a, x = it.b, y = it.c, node = it.d;
-        if (node && node.depleted) { drawSpr(c, G.stumpSprite(kd), (x + 0.5) * T, (y + 0.95) * T, k); return; }
         const variant = G.hash(x, y, 2) % 3, jit = ((G.hash(x, y, 4) % 5) - 2) * k;
+        const an = node ? nodeFlip(node, now) : null;
+        if (node && node.depleted) {
+          drawSpr(c, G.stumpSprite(kd), (x + 0.5) * T, (y + 0.95) * T, k);
+          const age = an ? (now - an.t) / 750 : 2;
+          if (age < 1) { // tree falls over
+            const side = node.x < x ? 1 : -1;
+            const ang = side * (Math.PI / 2) * age * age;
+            c.save();
+            c.translate((x + 0.5) * T + jit, (y + 1) * T - k);
+            c.rotate(ang);
+            drawSpr(c, G.treeSprite(kd, variant), 0, 0, k, age > 0.7 ? (1 - age) / 0.3 : 1);
+            c.restore();
+          }
+          return;
+        }
         shadow(c, (x + 0.5) * T + jit, (y + 0.9) * T, (kd === "bamboo" ? 0.4 : 0.6) * T, 0.18 * T, 0.22);
-        drawSpr(c, G.treeSprite(kd, variant), (x + 0.5) * T + jit, (y + 1) * T - k, k);
+        const grow = an ? (now - an.t) / 900 : 2;
+        if (grow < 1) { // regrows from a sapling
+          const sc = 0.3 + 0.7 * (1 - Math.pow(1 - grow, 3));
+          c.save();
+          c.translate((x + 0.5) * T + jit, (y + 1) * T - k);
+          c.scale(sc, sc);
+          drawSpr(c, G.treeSprite(kd, variant), 0, 0, k);
+          c.restore();
+        } else drawSpr(c, G.treeSprite(kd, variant), (x + 0.5) * T + jit, (y + 1) * T - k, k);
         return;
       }
       case K_ORE: {
         const kd = it.a, x = it.b, y = it.c, node = it.d;
+        if (node) nodeFlip(node, now);
         shadow(c, (x + 0.5) * T, (y + 0.88) * T, 0.5 * T, 0.16 * T, 0.25);
         drawSpr(c, G.rockSprite(kd, node && node.depleted, G.hash(x, y, 3) % 3), (x + 0.5) * T, (y + 1) * T - 1 * k, k);
         if (node && !node.depleted && Math.sin(t * 2 + x * 3 + y) > 0.97) {
@@ -1434,8 +1476,10 @@
       }
       case K_ROOF: drawRoof(c, it.a, T, now); return;
       case K_TORII: drawTorii(c, it.b, it.c, T, now); return;
+      case K_BOARD: { drawBoard(c, it.a, T, k, t); return; }
       case K_YARN: {
         const n = it.a;
+        nodeFlip(n, now);
         shadow(c, (n.x + 0.5) * T, (n.y + 0.82) * T, 0.42 * T, 0.12 * T, 0.22);
         drawSpr(c, G.bushSprite(n.depleted, G.hash(n.x, n.y, 6) % 3), (n.x + 0.5) * T, (n.y + 0.9) * T, k);
         return;
@@ -1482,13 +1526,15 @@
 
   function fishWaterTile(n) {
     let w = fx.fishWater.get(n.id);
+    if (w !== undefined && (w === null ? fx.fishWater.get(n.id + "@") !== n.x + "," + n.y : w.nx !== n.x || w.ny !== n.y)) w = undefined;
     if (w === undefined) {
       w = null;
       let best = 99;
       for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-        if (G.isWater(G.T(n.x + dx, n.y + dy))) { const d = Math.abs(dx) + Math.abs(dy) + (dx && dy ? 0.5 : 0); if (d < best) { best = d; w = { x: n.x + dx, y: n.y + dy }; } }
+        if (G.isWater(G.T(n.x + dx, n.y + dy))) { const d = Math.abs(dx) + Math.abs(dy) + (dx && dy ? 0.5 : 0); if (d < best) { best = d; w = { x: n.x + dx, y: n.y + dy, nx: n.x, ny: n.y }; } }
       }
       fx.fishWater.set(n.id, w);
+      if (!w) fx.fishWater.set(n.id + "@", n.x + "," + n.y);
     }
     return w;
   }
@@ -1838,6 +1884,7 @@
       p.t += dt;
       if (p.t >= p.life) { P[i] = P[P.length - 1]; P.pop(); continue; }
       if (p.kind === "firefly") { p.vx += (Math.random() - 0.5) * dt * 0.8; p.vy += (Math.random() - 0.5) * dt * 0.8; p.vx *= 0.98; p.vy *= 0.98; }
+      if (p.g) p.vy += p.g * dt;
       if (p.vx != null) { p.x += p.vx * dt; p.y += p.vy * dt; }
     }
   }
@@ -1871,6 +1918,18 @@
         const sx = x + Math.sin(p.t * 3 + p.ph) * 3 * k;
         c.globalAlpha = a;
         c.fillStyle = "#78b450"; c.fillRect(Math.round(sx), Math.round(y), Math.ceil(k * 1.6), Math.ceil(k));
+        c.globalAlpha = 1;
+      } else if (p.kind === "spark") {
+        c.globalAlpha = a;
+        c.fillStyle = p.col;
+        const sz = Math.ceil(k * (p.sz || 1.2));
+        c.fillRect(Math.round(x), Math.round(y), sz, sz);
+        c.globalAlpha = 1;
+      } else if (p.kind === "ring") {
+        const rr = (0.2 + p.t / p.life * 0.9) * T;
+        c.globalAlpha = 0.8 * (1 - p.t / p.life);
+        c.strokeStyle = p.col; c.lineWidth = Math.max(1, k);
+        c.beginPath(); c.ellipse(x, y, rr, rr * 0.55, 0, 0, Math.PI * 2); c.stroke();
         c.globalAlpha = 1;
       } else if (p.kind === "smoke") {
         const s = (p.s || 0.12) + p.t * 0.12;
@@ -2070,6 +2129,8 @@
       if (n.type === "yarn") dlAdd(n.y + 0.5, K_YARN, n, 0, 0, null);
       else if (n.type === "furnace") { view.fires.push(n); lightAdd(n.x + 0.5, n.y + 0.6, 3.2, 0, 1); dlAdd(n.y + 0.8, K_FURNACE, n, 0, 0, null); }
       else if (n.type === "anvil") dlAdd(n.y + 0.8, K_ANVIL, n, 0, 0, null);
+      else if (n.type === "board") dlAdd(n.y + 0.8, K_BOARD, n, 0, 0, null);
+      else if (n.type === "fish") nodeFlip(n, now);
       else if (n.type === "range") { lightAdd(n.x + 0.5, n.y + 0.7, 2.2, 0, 1); dlAdd(n.y + 0.8, K_RANGE, n, 0, 0, null); }
     }
 
@@ -2145,6 +2206,7 @@
     ctx.globalCompositeOperation = "lighter";
     drawParticles(ctx, T, now, true);
     ctx.globalCompositeOperation = "source-over";
+    drawChance(ctx, T, now);
     drawFloaters(ctx, T, now);
     drawNametags(ctx, TG, T);
     ctx.restore();
@@ -2205,6 +2267,8 @@
       if (d > 0) spawnFloat("+" + d + " " + sk.name + " xp", "#bff0a0", G.iconURL("skill", sk.id));
     }
     if (prev.gold != null && next.gold != null && next.gold > prev.gold) spawnFloat("+" + (next.gold - prev.gold) + " gold", "#ffe08a");
+    if (prev.invQty != null && invTotal(next) > prev.invQty && performance.now() - (state.lastGatherSfx || 0) > 400) sfx("pop", { vol: 0.8 });
+    if (prev.questsDone != null && questsDone(next) > prev.questsDone) sfx("quest");
   }
 
   const MOB_FLAGS = { mob: true };
@@ -2319,6 +2383,8 @@
     raf = requestAnimationFrame(loop);
     const dir = pumpMovement(now);
     drawWorld(now, dir);
+    audioTick(now);
+    heatTick(now);
     if (state.hudDirty && now - (state.hudAt || 0) > 200) { state.hudDirty = false; state.hudAt = now; refreshHud(); }
     adaptDpr(now);
   }
@@ -2768,6 +2834,7 @@
       held.add(code);
       return;
     }
+    if ((e.code === "KeyM" || e.key === "m" || e.key === "M") && !e.repeat) { e.preventDefault(); toggleMute(); return; }
     if (e.code === "Space" || e.code === "KeyE" || e.key === "e" || e.key === "E") {
       e.preventDefault();
       if (!e.repeat) interactNearby();
@@ -2823,6 +2890,7 @@
 
   function interactNearby() {
     if (!inGame()) return;
+    if (chanceArmed(performance.now(), false)) { sendHit(); return; }
     const mx = Math.round(state.me.x), my = Math.round(state.me.y);
     const r = fx.meR;
     const facing = (state.facing && performance.now() < (state.facingUntil || 0) + 4000 ? state.facing : null) || (r && r.facing) || "down";
@@ -2949,6 +3017,336 @@
     }, 7000);
   }
 
+
+  // ================= mini-games (server-timed windows) =================
+  const MGC = { ch: null, streak: 0, result: null };
+  function onChance(m) {
+    const now = performance.now();
+    MGC.ch = { id: m.id, kind: m.kind, t0: now, openAt: now + (m.in || 0), closeAt: now + (m.in || 0) + (m.win || 0), lead: m.lead || 0, node: m.node || state.actNode || null, period: m.period || 0, center: m.center || 0.5, perfect: m.perfect || 0.07, fine: m.fine || 0.17, done: false, cued: false };
+    if (m.kind === "heat") showHeat(MGC.ch);
+  }
+  function chanceArmed(now, fromCanvas) {
+    const c = MGC.ch;
+    if (!c || c.done) return false;
+    if (c.kind === "heat") return !fromCanvas && now < c.closeAt + 150;
+    if (fromCanvas) return now >= c.openAt - (c.lead || 0) - 150 && now < c.closeAt + 250;
+    return now < c.closeAt + 250;
+  }
+  function sendHit() {
+    const c = MGC.ch;
+    if (!c || c.done) return;
+    c.done = true;
+    c.tapAt = performance.now();
+    if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type: "hit", id: c.id }));
+    const act = $("action-btn");
+    if (act) { act.classList.add("held"); setTimeout(() => act.classList.remove("held"), 120); }
+  }
+  const GOOD_WORDS = { bite: "Great catch!", sparkle: "Weak point!", chop: "Clean chop!", heat: "Nice!" };
+  function chanceTarget(c) {
+    const n = c && c.node && state.nodes.find((x) => x.id === c.node);
+    if (!n) return state.me ? { x: state.me.x, y: state.me.y } : null;
+    if (n.type === "fish") { const w = fishWaterTile(n); if (w) return { x: w.x, y: w.y }; }
+    if (n.rockX != null) return { x: n.rockX, y: n.rockY };
+    return { x: n.x, y: n.y };
+  }
+  function burst(x, y, cols, n, speed) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = (0.6 + Math.random()) * (speed || 1.6);
+      fx.particles.push({ kind: "spark", x: x + 0.5, y: y + 0.3, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1.2, g: 4, t: 0, life: 0.6 + Math.random() * 0.4, col: cols[i % cols.length], sz: 1 + Math.random() });
+    }
+  }
+  function onChanceEnd(m) {
+    const now = performance.now();
+    const c = MGC.ch && MGC.ch.id === m.id ? MGC.ch : null;
+    MGC.streak = m.streak | 0;
+    state.hudDirty = true;
+    if (c) c.done = true;
+    if (m.cancelled) { hideHeat(); return; }
+    const kind = m.kind || (c && c.kind);
+    MGC.result = { ok: !!m.ok, quality: m.quality || null, kind, t: now, missed: !!m.missed };
+    if (m.missed) return; // AFK players don't get nagged
+    const tgt = chanceTarget(c);
+    if (m.ok) {
+      const perfect = m.quality === "perfect";
+      sfx(perfect || kind !== "heat" ? "perfect" : "good", { streak: MGC.streak });
+      const word = kind === "heat" ? (perfect ? "Perfect!" : "Fine!") : GOOD_WORDS[kind] || "Nice!";
+      spawnFloat(word + (MGC.streak >= 2 ? " ×" + MGC.streak : ""), perfect ? "#ffe066" : "#bff0a0");
+      if (tgt) { burst(tgt.x, tgt.y, perfect ? ["#ffe066", "#fff6c0", "#ffb347"] : ["#bff0a0", "#ffffff", "#7fd0ff"], perfect ? 22 : 14); fx.particles.push({ kind: "ring", x: tgt.x + 0.5, y: tgt.y + 0.6, t: 0, life: 0.6, col: perfect ? "#ffe066" : "#bff0a0" }); }
+    } else {
+      sfx("bad");
+      spawnFloat(kind === "heat" ? "Off the mark" : kind === "chop" ? "Off beat" : "Too early", "#ffb0a0");
+    }
+    if (kind === "heat") { const hid = m.id; setTimeout(() => { if (!MGC.ch || MGC.ch.id === hid) hideHeat(); }, 450); }
+  }
+  // Heat bar (smithing / cooking): marker bounces; the gold zone is the server's sweet spot.
+  function showHeat(c) {
+    const el = $("heat-bar");
+    if (!el) return;
+    const fine = $("hb-fine"), perf = $("hb-perfect");
+    fine.style.left = ((c.center - c.fine) * 100).toFixed(1) + "%"; fine.style.width = (c.fine * 200).toFixed(1) + "%";
+    perf.style.left = ((c.center - c.perfect) * 100).toFixed(1) + "%"; perf.style.width = (c.perfect * 200).toFixed(1) + "%";
+    $("hb-label").textContent = (touchControlsOn() ? "Tap Use" : "Press E") + " when the marker is in the gold";
+    el.hidden = false;
+    el.classList.remove("ok", "bad");
+  }
+  function hideHeat() { const el = $("heat-bar"); if (el) el.hidden = true; }
+  function heatTick(now) {
+    const c = MGC.ch;
+    if (!c || c.kind !== "heat") return;
+    const el = $("heat-bar");
+    if (!el || el.hidden) return;
+    if (!c.done && now > c.closeAt + 300) { hideHeat(); return; }
+    const t = c.done && c.tapAt ? c.tapAt : now;
+    const ph = Math.max(0, t - c.openAt) / c.period, f = ph % 2, pos = f <= 1 ? f : 2 - f;
+    $("hb-marker").style.left = (pos * 100).toFixed(2) + "%";
+    if (c.done && MGC.result && MGC.result.kind === "heat") el.classList.toggle("ok", MGC.result.ok), el.classList.toggle("bad", !MGC.result.ok);
+  }
+  (() => {
+    const el = $("heat-bar");
+    if (el) el.addEventListener("pointerdown", (e) => { e.preventDefault(); if (chanceArmed(performance.now(), false)) sendHit(); });
+  })();
+  function star(c, x, y, r, col) {
+    c.fillStyle = col;
+    c.beginPath();
+    for (let j = 0; j < 8; j++) { const a = (j / 8) * Math.PI * 2, rr = j % 2 ? r * 0.28 : r; c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+    c.closePath(); c.fill();
+  }
+  function tapHint(c, x, y, k, col) {
+    const label = touchControlsOn() ? "TAP!" : "E!";
+    const fs = Math.round(Math.max(16, 9 * k));
+    const bob = Math.sin(performance.now() / 90) * k;
+    c.font = `900 ${fs}px "Trebuchet MS", sans-serif`;
+    c.textAlign = "center";
+    const w = c.measureText(label).width + fs * 0.7;
+    c.fillStyle = "rgba(30,16,8,.85)";
+    c.fillRect(Math.round(x - w / 2), Math.round(y - fs * 0.95 + bob), Math.round(w), Math.round(fs * 1.25));
+    c.strokeStyle = col || "#ffe066"; c.lineWidth = 2;
+    c.strokeRect(Math.round(x - w / 2) + 0.5, Math.round(y - fs * 0.95 + bob) + 0.5, Math.round(w), Math.round(fs * 1.25));
+    c.fillStyle = col || "#ffe066"; c.fillText(label, x, y + bob);
+  }
+  function drawChance(c, T, now) {
+    const k = T / G.BT;
+    const me = state.me;
+    // idle bobber while fishing
+    const fishing = me && me.action === "gather" && state.actNode && (state.nodes.find((n) => n.id === state.actNode) || {}).type === "fish";
+    const ch = MGC.ch;
+    if (fishing) {
+      const n = state.nodes.find((x) => x.id === state.actNode);
+      const w = n && fishWaterTile(n);
+      if (w) {
+        const bite = ch && ch.kind === "bite" && !ch.done && now >= ch.openAt && now <= ch.closeAt;
+        const bx = (w.x + 0.5) * T, by = (w.y + 0.45) * T + (bite ? 3 * k : Math.sin(now / 300) * 1.2 * k);
+        const mr = fx.meR || me;
+        c.globalAlpha = 0.7; c.strokeStyle = "#f4f0e8"; c.lineWidth = Math.max(1, k * 0.4);
+        c.beginPath(); c.moveTo((mr.x + 0.75) * T, (mr.y - 0.35) * T); c.quadraticCurveTo((mr.x + w.x) / 2 * T + T * 0.5, Math.min(mr.y, w.y) * T - 0.3 * T, bx, by - 2 * k); c.stroke();
+        c.globalAlpha = 1;
+        if (bite) {
+          const p = (now - ch.openAt) / (ch.closeAt - ch.openAt);
+          c.globalAlpha = 0.9 - p * 0.6; c.strokeStyle = "#ffffff"; c.lineWidth = Math.max(1, k * 0.8);
+          for (let i = 0; i < 2; i++) { const rr = (0.2 + ((p * 2 + i * 0.5) % 1) * 0.5) * T; c.beginPath(); c.ellipse(bx, by + k, rr, rr * 0.45, 0, 0, Math.PI * 2); c.stroke(); }
+          c.globalAlpha = 1;
+          c.fillStyle = "#c8322a"; c.fillRect(Math.round(bx - 1.5 * k), Math.round(by), Math.ceil(3 * k), Math.ceil(1.5 * k));
+          tapHint(c, bx, by - 10 * k, k);
+          const mr2 = fx.meR || me;
+          c.font = `900 ${Math.round(Math.max(18, 11 * k))}px "Trebuchet MS", sans-serif`; c.textAlign = "center";
+          c.lineWidth = 4; c.strokeStyle = "#3a1008"; c.strokeText("!", (mr2.x + 0.5) * T, (mr2.y - 1.3) * T); c.fillStyle = "#ffe066"; c.fillText("!", (mr2.x + 0.5) * T, (mr2.y - 1.3) * T);
+          if (!ch.cued) { ch.cued = true; sfx("bite"); }
+        } else {
+          c.fillStyle = "#c8322a"; c.fillRect(Math.round(bx - 1.5 * k), Math.round(by - 2 * k), Math.ceil(3 * k), Math.ceil(2 * k));
+          c.fillStyle = "#f4f0e8"; c.fillRect(Math.round(bx - 1.5 * k), Math.round(by), Math.ceil(3 * k), Math.ceil(1.5 * k));
+        }
+      }
+    }
+    if (!ch || ch.done) return;
+    if (ch.kind === "sparkle" && now >= ch.openAt && now <= ch.closeAt) {
+      const tg = chanceTarget(ch);
+      if (!tg) return;
+      const p = (now - ch.openAt) / (ch.closeAt - ch.openAt);
+      const ox = ((ch.id * 37) % 7 - 3) * 0.08, oy = ((ch.id * 53) % 5 - 2) * 0.06;
+      const x = (tg.x + 0.5 + ox) * T, y = (tg.y + 0.35 + oy) * T;
+      const pulse = 0.75 + 0.25 * Math.sin(now / 60);
+      drawGlow(c, "spark", "255,230,120", false, x, y, 16 * k, 0.8 - p * 0.4);
+      c.globalAlpha = 1 - p * 0.4;
+      star(c, x, y, 11 * k * pulse, "#fff6c0");
+      star(c, x, y, 5 * k * pulse, "#ffd040");
+      c.globalAlpha = 1;
+      tapHint(c, x, y - 14 * k, k);
+      if (!ch.cued) { ch.cued = true; sfx("glint"); }
+    } else if (ch.kind === "chop") {
+      const tg = chanceTarget(ch);
+      if (!tg) return;
+      const start = ch.openAt - ch.lead, mid = (ch.openAt + ch.closeAt) / 2;
+      if (now < start || now > ch.closeAt) return;
+      const x = (tg.x + 0.5) * T, y = (tg.y + 0.35) * T;
+      const target = 0.42 * T;
+      const r = now < mid ? target + (1.7 * T - target) * ((mid - now) / (mid - start)) : target;
+      const inWin = now >= ch.openAt;
+      c.globalAlpha = 0.55; c.strokeStyle = "#fff6c0"; c.lineWidth = Math.max(1, k * 0.8);
+      c.beginPath(); c.arc(x, y, target, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 0.95; c.strokeStyle = inWin ? "#9cf07a" : "#ffffff"; c.lineWidth = Math.max(2, k * 1.4);
+      c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 1;
+      if (inWin) { tapHint(c, x, y - target - 4 * k, k, "#9cf07a"); if (!ch.cued) { ch.cued = true; sfx("beat"); } }
+    }
+  }
+  // depletion / respawn transitions (trees fall, rocks crumble, fish scatter)
+  function nodeFlip(n, now) {
+    let a = fx.nodeAnim.get(n.id);
+    if (!a) { a = { dep: !!n.depleted, t: -1e9, x: n.x, y: n.y }; fx.nodeAnim.set(n.id, a); return a; }
+    if (a.dep !== !!n.depleted) {
+      a.dep = !!n.depleted; a.t = now;
+      const tx = n.rockX != null ? n.rockX : n.x, ty = n.rockY != null ? n.rockY : n.y;
+      const near = state.me && Math.hypot(tx - state.me.x, ty - state.me.y) < 10;
+      if (n.depleted) {
+        if (n.type === "ore") burst(tx, ty, ["#8a7f72", "#5a524a", "#b0a494"], 14, 1.2);
+        else if (n.type === "tree" && near) sfx("timber", { x: tx, y: ty, other: n.id !== state.actNode });
+        else if (n.type === "fish") { const w = fishWaterTile(n); if (w) fx.particles.push({ kind: "ring", x: w.x + 0.5, y: w.y + 0.5, t: 0, life: 0.8, col: "#dcf5ff" }); }
+      } else if (near) {
+        burst(tx, ty, n.type === "tree" ? ["#9cd070", "#d8f0a0"] : ["#fff6c0", "#ffe066"], 8, 0.9);
+      }
+    }
+    return a;
+  }
+  function drawBoard(c, n, T, k, t) {
+    const x = (n.x + 0.5) * T, y = (n.y + 0.95) * T;
+    shadow(c, x, y - k, 0.5 * T, 0.12 * T, 0.25);
+    c.fillStyle = "#5a3a1e"; c.fillRect(Math.round(x - 7 * k), Math.round(y - 15 * k), Math.ceil(2 * k), Math.round(15 * k)); c.fillRect(Math.round(x + 5 * k), Math.round(y - 15 * k), Math.ceil(2 * k), Math.round(15 * k));
+    c.fillStyle = "#8a5a2e"; c.fillRect(Math.round(x - 9 * k), Math.round(y - 17 * k), Math.round(18 * k), Math.round(10 * k));
+    c.fillStyle = "#b8322a"; c.fillRect(Math.round(x - 10 * k), Math.round(y - 19 * k), Math.round(20 * k), Math.round(3 * k));
+    c.fillStyle = "#f4ead0"; c.fillRect(Math.round(x - 7 * k), Math.round(y - 15 * k), Math.round(4 * k), Math.round(5 * k)); c.fillRect(Math.round(x - 2 * k), Math.round(y - 16 * k), Math.round(4 * k), Math.round(6 * k)); c.fillRect(Math.round(x + 3 * k), Math.round(y - 15 * k), Math.round(4 * k), Math.round(5 * k));
+    const d = state.me && state.me.daily;
+    const left = d ? d.tasks.filter((x2) => !x2.done).length : 0;
+    if (left) { const bob = Math.sin(t * 3) * k; c.fillStyle = "#ffe066"; c.fillRect(Math.round(x - k), Math.round(y - 26 * k + bob), Math.ceil(2 * k), Math.round(4 * k)); c.fillRect(Math.round(x - k), Math.round(y - 21 * k + bob), Math.ceil(2 * k), Math.ceil(2 * k)); }
+  }
+  function renderDaily(me) {
+    const box = $("daily-list");
+    if (!box) return;
+    const d = me.daily;
+    if (!d || !d.tasks) { box.innerHTML = ""; return; }
+    const rows = d.tasks.map((t) => {
+      const pct = Math.round((Math.min(t.goal, t.prog) / t.goal) * 100);
+      const xp = Object.entries(t.xp || {}).map(([k2, v]) => `${v} ${k2} xp`).join(", ");
+      return `<div class="daily${t.done ? " done" : ""}"><div class="row"><span>${t.done ? "✔ " : ""}${esc(t.label)}</span><span class="fine">${Math.min(t.goal, t.prog)}/${t.goal}</span></div><div class="bar"><i style="width:${pct}%"></i></div><div class="fine">Reward: ${t.gold} gold${xp ? ", " + esc(xp) : ""}</div></div>`;
+    }).join("");
+    box.innerHTML = `<h3>Daily tasks <span class="fine">(new ones at 00:00 UTC · board by Old Maneki)</span></h3>${rows}<p class="fine">Best timing combo: ${me.bestStreak | 0}. Timing mini-games are optional — AFK gathering still works.</p>`;
+  }
+
+  // ================= sound wiring =================
+  const AU = () => window.NHLAudio || null;
+  function sfx(name, o) { const a = AU(); if (a) a.play(name, o || {}); }
+  function toggleMute() { const a = AU(); if (!a) return; a.unlock(); const m = a.toggleMute(); toast(m ? "Sound muted (press M to unmute)" : "Sound on"); }
+  function invTotal(me) { let n = 0; for (const it of (me && me.inventory) || []) n += it.qty || 1; return n; }
+  function questsDone(me) { let n = 0; for (const v of Object.values((me && me.quests) || {})) if (v && v.done) n++; return n; }
+  function noteInteract(id) {
+    state.actNode = state.nodes.some((n) => n.id === id) ? id : state.actNode;
+    if (state.npcs.some((n) => n.id === id)) state.npcTalkAt = performance.now();
+    state.actStart = performance.now();
+  }
+  function onFx(m) {
+    const now = performance.now();
+    if (m.kind === "gather") {
+      state.lastGatherSfx = now;
+      const s2 = m.skill;
+      if (s2 === "fishing") sfx("catch"); else if (s2 === "mining") sfx(m.shower ? "shower" : "clink"); else if (s2 === "woodcutting") sfx(m.shower ? "timber" : "chop"); else sfx("pop");
+      if (m.rare) { sfx("sparkle"); burst(m.x, m.y - 0.3, ["#fff6c0", "#ffe066", "#a8f0ff"], 18, 1.4); }
+      if (m.shower && m.skill === "mining") { const n = state.nodes.find((x) => x.id === m.node); const tx = n && n.rockX != null ? n.rockX : m.x, ty = n && n.rockY != null ? n.rockY : m.y; for (let i = 0; i < 12; i++) fx.particles.push({ kind: "spark", x: tx + Math.random(), y: ty - 1.5 - Math.random(), vx: (Math.random() - 0.5) * 0.6, vy: 0.5, g: 6, t: 0, life: 0.9, col: i % 2 ? "#8a7f72" : "#c8bca8", sz: 2 }); }
+      if (!m.good) burst(m.x, m.y - 0.2, s2 === "fishing" ? ["#dcf5ff", "#a8d8f0"] : s2 === "woodcutting" ? ["#c8a060", "#8a6a3a"] : s2 === "mining" ? ["#a09382", "#72675b"] : ["#ff8ab8", "#ffd6e8"], 6, 0.9);
+    } else if (m.kind === "craft") {
+      if (m.quality === "burnt") { sfx("burnt"); burst(state.me.x, state.me.y - 0.6, ["#3a3430", "#6a625a"], 10, 0.8); spawnFloat("Burnt!", "#ffb0a0"); }
+      else { sfx(m.verb === "smith" ? "anvil" : m.verb === "smelt" ? "whoosh" : "pop"); if (m.quality === "perfect" || m.quality === "fine") burst(state.me.x, state.me.y - 0.6, ["#ffe066", "#fff6c0"], 12, 1.1); }
+    } else if (m.kind === "death") {
+      sfx("death");
+      MGC.ch = null; MGC.streak = 0; hideHeat();
+    } else if (m.kind === "task") {
+      sfx("quest");
+      burst(state.me.x, state.me.y - 0.8, ["#ffe066", "#ff8ab8", "#9cf07a", "#7fd0ff"], 26, 1.8);
+      showFanfare("Daily task complete!");
+    }
+  }
+  const SURF = { dock: "wood", plank: "wood", bridge: "wood", sand: "sand", stone: "stone", quarry: "stone", floor: "wood", rug: "wood", shrine: "stone" };
+  const AUD = { lastTile: -1, tick: 0, nextAct: 0, others: new Map(), actKind: null };
+  const ACT_SFX = { mining: ["clink", 900], woodcutting: ["chop", 950], yarn: ["step", 1100], cook: ["sizzle", 1100], smelt: ["whoosh", 1500], smith: ["anvil", 1000] };
+  function audioTick(now) {
+    const a = AU();
+    if (!a || !state.me || !inGame()) return;
+    const mr = fx.meR || state.me;
+    // own footsteps on tile change
+    const tile = Math.round(mr.y) * 4096 + Math.round(mr.x);
+    if (tile !== AUD.lastTile) {
+      if (AUD.lastTile >= 0 && !state.me.action) a.play("step", { surface: SURF[G.T(Math.round(mr.x), Math.round(mr.y))] || "grass", vol: 0.7 });
+      AUD.lastTile = tile;
+    }
+    // action loops (mine / chop / cook / smelt / smith); fishing casts once when it starts
+    const act = state.me.action;
+    let key = null;
+    if (act === "gather") { const n = state.nodes.find((x) => x.id === state.actNode); key = n ? n.skill : null; }
+    else if (act === "cook" || act === "smelt" || act === "smith") key = act;
+    if (key !== AUD.actKind) { AUD.actKind = key; AUD.nextAct = now + 250; if (key === "fishing") a.play("cast"); }
+    if (key && ACT_SFX[key] && now >= AUD.nextAct) { AUD.nextAct = now + ACT_SFX[key][1]; a.play(ACT_SFX[key][0], { vol: key === "yarn" ? 0.5 : 0.75, surface: "sand" }); }
+    if (now - AUD.tick < 250) return;
+    AUD.tick = now;
+    // others nearby: quieter footsteps and work sounds
+    for (const p of state.players) {
+      if (p.id === state.me.id) continue;
+      const r = entityR(p.id) || p;
+      const d = Math.hypot(r.x - mr.x, r.y - mr.y);
+      let o = AUD.others.get(p.id);
+      if (!o) { o = { x: r.x, y: r.y, next: 0 }; AUD.others.set(p.id, o); }
+      if (d < 10) {
+        if (Math.abs(r.x - o.x) + Math.abs(r.y - o.y) > 0.8) a.play("step", { x: r.x, y: r.y, other: true, src: p.id });
+        if (p.action && now > o.next) {
+          o.next = now + 1100;
+          const n = state.nodes.find((x) => Math.abs(x.x - r.x) <= 1.5 && Math.abs(x.y - r.y) <= 1.5);
+          const sk = p.action === "gather" ? (n && n.skill) : p.action;
+          if (sk && ACT_SFX[sk]) a.play(ACT_SFX[sk][0], { x: r.x, y: r.y, other: true, src: p.id });
+          else if (p.action === "combat") a.play("hit", { x: r.x, y: r.y, other: true, src: p.id });
+        }
+      }
+      o.x = r.x; o.y = r.y;
+    }
+    if (AUD.others.size > state.players.length + 20) { const ids = new Set(state.players.map((p) => p.id)); for (const id of AUD.others.keys()) if (!ids.has(id)) AUD.others.delete(id); }
+    // ambience by zone: water nearby, birds by day in green zones, crickets at night
+    const h = G.hourNow(fx.todOverride);
+    const night = G.darknessAt(h);
+    let water = 0;
+    const cx = Math.round(mr.x), cy = Math.round(mr.y);
+    for (let dy = -6; dy <= 6; dy += 2) for (let dx = -6; dx <= 6; dx += 2) if (G.isWater(G.T(cx + dx, cy + dy))) water++;
+    const z = G.zoneIdAt(cx, cy);
+    const t0 = G.T(cx, cy);
+    a.update({ x: mr.x, y: mr.y, night, water: Math.min(1, water / 12), indoors: t0 === "floor" || t0 === "rug", green: z === "mine" || z === "quarry" || z === "tunnel" ? 0.15 : 1 });
+  }
+  // speaker button + settings popover
+  (() => {
+    const btn = $("sound-btn"), gear = $("sound-settings"), pop = $("sound-pop");
+    const mus = $("vol-music"), eff = $("vol-sfx"), mute = $("sound-mute");
+    const sync = () => {
+      const a = AU();
+      if (!a) return;
+      const st = a.settings();
+      if (btn) { btn.classList.toggle("muted", st.muted); btn.setAttribute("aria-pressed", st.muted ? "true" : "false"); btn.title = st.muted ? "Unmute (M)" : "Mute (M)"; btn.setAttribute("aria-label", st.muted ? "Unmute sound" : "Mute sound"); }
+      if (mus && document.activeElement !== mus) mus.value = Math.round(st.music * 100);
+      if (eff && document.activeElement !== eff) eff.value = Math.round(st.sfx * 100);
+      if ($("vol-music-v")) $("vol-music-v").textContent = Math.round(st.music * 100) + "%";
+      if ($("vol-sfx-v")) $("vol-sfx-v").textContent = Math.round(st.sfx * 100) + "%";
+      if (mute) mute.textContent = st.muted ? "Unmute" : "Mute all";
+    };
+    const a = AU();
+    if (a) a.onChange(sync);
+    sync();
+    if (btn) btn.addEventListener("click", (e) => { e.stopPropagation(); const au = AU(); if (au) { au.unlock(); au.toggleMute(); } });
+    if (gear && pop) gear.addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; if (!pop.hidden) { const zc = $("zoom-controls"), host = pop.offsetParent; if (zc && host) { const zr = zc.getBoundingClientRect(), hr = host.getBoundingClientRect(); pop.style.left = Math.round(zr.right - hr.left + 8) + "px"; } } gear.setAttribute("aria-expanded", pop.hidden ? "false" : "true"); const au = AU(); if (au) au.unlock(); sync(); });
+    if (mute) mute.addEventListener("click", () => { const au = AU(); if (au) au.toggleMute(); });
+    if (mus) mus.addEventListener("input", () => { const au = AU(); if (au) au.set({ music: mus.value / 100, muted: false }); });
+    if (eff) eff.addEventListener("input", () => { const au = AU(); if (au) { au.set({ sfx: eff.value / 100, muted: false }); au.play("pop"); } });
+    document.addEventListener("pointerdown", (e) => { if (pop && !pop.hidden && !pop.contains(e.target) && e.target !== gear && !(gear && gear.contains(e.target))) { pop.hidden = true; if (gear) gear.setAttribute("aria-expanded", "false"); } });
+    // UI click / tab sounds
+    document.addEventListener("click", (e) => {
+      const b = e.target && e.target.closest && e.target.closest("button, .slot");
+      if (!b || b.id === "sound-btn" || b.id === "action-btn") return;
+      sfx(b.closest(".tabs") ? "tab" : "click");
+    }, true);
+  })();
+
   window.__nhl = {
     send,
     getState: () => state,
@@ -2958,6 +3356,9 @@
     getFps: () => ({ fps: fx.fps, frameMs: Math.round(fx.frameMs * 100) / 100 }),
     getFx: () => fx,
     setTouchControls: (on) => { localStorage.setItem("nhl-touch", on ? "on" : "off"); applyTouchControls(); },
+    getChance: () => ({ ch: MGC.ch, streak: MGC.streak, result: MGC.result }),
+    sendHit,
+    audio: () => window.NHLAudio || null,
   };
 
   bootLogin().then(() => {

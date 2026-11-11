@@ -526,3 +526,59 @@ body.touch-on #key-hint { bottom: 140px; }
 footer .ca { font-family: ui-monospace, Menlo, Consolas, monospace; }
 .nihala-box button.ca { background: rgba(20,12,6,.65); color: #ffe08a; border: 1px solid rgba(212,160,23,.55); padding: 2px 6px; cursor: copy; max-width: 100%; }
 .nihala-box button.ca:hover { background: rgba(60,36,12,.8); }
+
+/* ---- sound controls ---- */
+#zoom-controls #sound-btn, #zoom-controls #sound-settings { display: flex; align-items: center; justify-content: center; }
+#sound-btn .cross { display: none; }
+#sound-btn.muted .cross { display: inline; }
+#sound-btn.muted .wave { display: none; }
+#sound-btn.muted { color: #e8a090; }
+#sound-pop {
+  position: absolute; left: 60px; top: 8px; z-index: 9; width: 230px; padding: 10px 12px;
+  background: linear-gradient(var(--paper-1, #f4e6c4), var(--paper-2, #e6d2a4)); color: #2a1c12;
+  border: 2px solid #8a6a3a; box-shadow: 0 0 0 1px #3a2414, 0 8px 24px rgba(0,0,0,.5);
+}
+#sound-pop[hidden] { display: none; }
+#sound-pop .eyebrow { margin: 0 0 6px; color: #8a2a1a; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; font-size: 11px; }
+#sound-pop .fine { color: #5a4630; margin: 6px 0 0; font-size: 11px; }
+.vol-row { display: grid; grid-template-columns: 56px 1fr 40px; align-items: center; gap: 6px; margin: 6px 0; font-weight: 700; font-size: 13px; }
+.vol-row input[type=range] { width: 100%; accent-color: #b8322a; min-height: 28px; }
+.vol-row output { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+#sound-mute { width: 100%; min-height: 36px; margin-top: 4px; background: linear-gradient(#c44a32, #8c2c1c); color: #fff3c8; border: 1px solid #d4a017; font-weight: 700; cursor: pointer; }
+
+/* ---- mini-games ---- */
+#streak {
+  position: absolute; right: 10px; top: 174px; z-index: 6; padding: 4px 10px; font-weight: 800; color: #3a1a00;
+  background: linear-gradient(#ffe27a, #e6a92a); border: 2px solid #8a5a10; box-shadow: 0 0 0 2px #3a1a08, 0 0 14px rgba(255,210,90,.55);
+  animation: streak-pop .25s ease-out;
+}
+#streak[hidden] { display: none; }
+@keyframes streak-pop { 0% { transform: scale(.7); } 70% { transform: scale(1.12); } 100% { transform: scale(1); } }
+#heat-bar {
+  position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 8; width: min(360px, 70vw);
+  padding: 8px 10px 6px; background: rgba(20,12,8,.88); border: 2px solid var(--gold-dim, #8a6a3a); box-shadow: 0 0 0 2px #2a1408;
+  text-align: center; touch-action: manipulation; cursor: pointer; user-select: none;
+}
+#heat-bar[hidden] { display: none; }
+.hb-track { position: relative; height: 18px; background: linear-gradient(90deg, #3a5a8a, #c8a040 50%, #c83a2a); border: 2px solid #1a0e06; }
+#hb-fine { position: absolute; top: 0; bottom: 0; background: rgba(255,240,170,.45); }
+#hb-perfect { position: absolute; top: -2px; bottom: -2px; background: #ffe066; box-shadow: 0 0 8px #ffe066; }
+#hb-marker { position: absolute; top: -6px; bottom: -6px; width: 4px; margin-left: -2px; background: #fff; box-shadow: 0 0 0 1px #000; }
+#hb-label { display: block; margin-top: 4px; color: #ffe9a0; font-size: 12px; font-weight: 700; }
+#heat-bar.ok { border-color: #9cf07a; }
+#heat-bar.bad { border-color: #e85a4a; }
+body.touch-on #heat-bar { bottom: 150px; }
+.daily-box h3 { margin: 0 0 6px; font-size: 14px; color: #ffe08a; }
+.daily { background: rgba(244,230,196,.07); border: 1px solid rgba(212,160,23,.35); padding: 6px 8px; margin-bottom: 6px; }
+.daily .row { display: flex; justify-content: space-between; gap: 6px; font-weight: 700; font-size: 13px; }
+.daily .bar { height: 6px; background: rgba(0,0,0,.35); margin: 4px 0; }
+.daily .bar i { display: block; height: 100%; background: linear-gradient(90deg, #9cd070, #e6c040); }
+.daily.done { opacity: .75; }
+.daily.done .row span:first-child { color: #9cf07a; }
+@media (max-width: 760px) {
+  #sound-pop { left: 58px; top: 8px; width: min(240px, calc(100vw - 72px)); }
+  #streak { top: auto; bottom: 230px; right: 12px; }
+}
+
+/* short game area on touch (panel open, landscape): wrap the button column so it never reaches the joystick */
+body.touch-on #zoom-controls { flex-wrap: wrap; align-content: flex-start; max-height: calc(100% - 158px); column-gap: 6px; }

@@ -7,13 +7,17 @@
   "scripts": {
     "start": "node server.js",
     "test:clients": "node test-two-clients.mjs",
-    "test:avatar": "node test-avatar-upload.mjs"
+    "test:avatar": "node test-avatar-upload.mjs",
+    "test:wallet": "node test-wallet-auth.mjs"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "bs58": "^5.0.0",
     "express": "^4.21.2",
+    "pg": "^8.23.1",
+    "tweetnacl": "^1.0.3",
     "ws": "^8.18.3"
   }
 }

@@ -14,9 +14,10 @@ Art for player and NPC avatars comes from the public [mihao pfps Meme Depot](htt
 - Resource nodes deplete and respawn. Raw fish can be cooked at the village range. Cooked fish heals.
 - 28-slot inventory, a bank (Banker Bao, west building), a gold shop (Merchant Mao, east building) for cosmetics.
 - Multiplayer: positions, names, avatars, and a rate-limited global chat (length + basic profanity filter).
-- Accounts persist in `data/players.json` (chosen name + a random token stored in the browser). Progress is tied to that browser; clearing site data or switching devices starts a new character.
+- Accounts persist in `data/players.json` (or Postgres when `DATABASE_URL` is set). A random session token is stored in the browser. Guest play (name only) still works on one browser.
+- **Sign in with a Solana wallet** (Phantom, Solflare, Backpack, or any injected `window.solana`-compatible wallet). The game only calls `signMessage` on a login text — it never calls `signTransaction` and never sends a transaction. The same wallet on another device loads the same character. A guest can link their current character to a wallet that does not have a character yet. Wallet sessions last 30 days, then you sign the login message again. If no wallet is injected (typical on mobile), the login screen offers Open in Phantom / Open in Solflare deep links.
 - Players can upload their own 128×128 picture from the login screen (cropped and resized in the browser). Keep it mihao and keep it clean — offensive pictures get removed. Click another player's custom picture in the world to report it.
-- Premium shop tab: catalogue stub and a read-only Phantom connect / $mihao balance check. **Purchases are disabled.** See `TOKEN-PURCHASE-FLOW.md`.
+- Premium shop tab: catalogue stub and a read-only $mihao balance check that reuses a signed-in wallet. **Purchases are disabled.** See `TOKEN-PURCHASE-FLOW.md`.
 
 ## Run locally
 
@@ -41,6 +42,7 @@ Avatar upload test (starts its own server if you pass nothing; or pass a base UR
 
 ```bash
 node test-avatar-upload.mjs
+node test-wallet-auth.mjs
 ```
 
 Health check: `GET /health`.
@@ -57,15 +59,18 @@ This is a single Node process that serves `public/` and accepts WebSockets on th
 6. Optional env:
    - `SOLANA_RPC` — public RPC for the read-only holder check (default mainnet-beta).
    - `COMPANION_MINT` — leave unset until a companion token exists.
-   - `DATA_DIR` — folder for `players.json` and uploaded pictures (default `./data`).
+   - `DATA_DIR` — folder for `players.json` and uploaded pictures when Postgres is not used (default `./data`).
+   - `DATABASE_URL` — optional Postgres connection string. When set, accounts (keyed by session token, unique wallet address) and uploaded pictures (bytea, served from `/avatars/<id>`) are stored in Postgres. Tables are created on boot if they are missing. When unset, the game falls back to `data/players.json` and `data/avatars`.
    - `ADMIN_KEY` — required to reset a reported custom picture (see below). If unset, the admin endpoint refuses every request.
-7. Do **not** put private keys, Phantom seeds, or a treasury key in env. This app has no signing code.
+7. Do **not** put private keys, Phantom seeds, or a treasury key in env. This app has no signing code and never sends a transaction.
 
-**Render:** new Web Service, Node, `npm install` + `npm start`, persistent disk mounted at `/opt/render/project/src/data` (or set `DATA_DIR`). On the **free** plan the disk is ephemeral: `data/players.json` and uploaded pictures both reset on every restart or redeploy, just like the in-game saves. Attach a persistent disk if you want them to last.
+**Render:** new Web Service, Node, `npm install` + `npm start`. Set `DATABASE_URL` to the **internal** Postgres URL if you attached a Render Postgres instance in the same region. That is how wallet logins and pictures survive a restart or redeploy.
+
+On the **free** web plan, the local disk is still ephemeral: without `DATABASE_URL`, `data/players.json` and uploaded pictures reset on every restart or redeploy. A **free Render Postgres** database expires **30 days after creation**. After it expires it is inaccessible unless you upgrade to a paid compute plan. There is then a **14-day grace period** to upgrade; after that, Render permanently deletes the database and its data. Free Postgres is also limited to 1 GB, one free database per workspace, no backups, and may restart for maintenance. [Render free-plan docs](https://render.com/docs/free).
 
 ## Custom pictures (admin)
 
-Players upload from the login screen. The browser crops to a center square, downscales to 128×128, and re-encodes to PNG or WebP (that step also strips EXIF / metadata). The server checks magic bytes, size (60KB max), and 128×128 dimensions, then stores the file under `data/avatars/`. Uploads are limited to one per 30 seconds per account and per IP.
+Players upload from the login screen. The browser crops to a center square, downscales to 128×128, and re-encodes to PNG or WebP (that step also strips EXIF / metadata). The server checks magic bytes, size (60KB max), and 128×128 dimensions, then stores the file under `data/avatars/` (or in Postgres as bytea when `DATABASE_URL` is set). Uploads are limited to one per 30 seconds per account and per IP.
 
 To remove a picture, set `ADMIN_KEY` on the host and call:
 
@@ -81,7 +86,7 @@ That sets the player back to the classic paw wave and deletes their uploaded fil
 
 **Fly:** `fly launch` with a `fly.toml` that sets `internal_port = 3000` and a volume for `/app/data`.
 
-The prototype stores everyone in one JSON file and one Node process. It is fine for a few dozen friends, not for a real launch shard.
+The prototype keeps the live world in one Node process and writes periodically (and on disconnect). It is fine for a few dozen friends, not for a real launch shard.
 
 ## Controls
 

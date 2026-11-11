@@ -24,8 +24,16 @@
         <p class="fine upload-note">Keep it mihao and keep it clean. Offensive pictures get removed.</p>
       </div>
       <button id="enter" type="button">Enter world</button>
+      <p class="or-line">or</p>
+      <button id="wallet-signin" type="button">Sign in with Solana wallet</button>
+      <p class="fine">Signs a login message only. It is not a transaction and costs nothing. Phantom, Solflare, Backpack, and other injected wallets work. Guest play (name only) still works, and you can link this character later if the wallet is new.</p>
+      <div id="wallet-deeplinks" class="wallet-deeplinks" hidden>
+        <p class="fine">No wallet was found in this browser. Open the game inside a wallet browser:</p>
+        <a id="open-phantom" target="_blank" rel="noopener">Open in Phantom</a>
+        <a id="open-solflare" target="_blank" rel="noopener">Open in Solflare</a>
+      </div>
       <p id="login-error" class="error" hidden></p>
-      <p class="fine">Returning? Your last name is restored automatically if this browser has a token.</p>
+      <p class="fine">Returning? Your last name is restored automatically if this browser has a token. Wallet sessions last 30 days, then you sign the login message again.</p>
     </div>
   </div>
 
@@ -71,8 +79,8 @@
         <div id="premium-list"></div>
         <div class="wallet-box">
           <h3>Wallet (read-only)</h3>
-          <p>Connect Phantom to check a $mihao holder badge. The game never asks you to sign a transfer, and the companion-token CA is still TBA.</p>
-          <button id="connect-wallet" type="button">Connect wallet (coming soon)</button>
+          <p>Sign in with a Solana wallet (a login message only — not a transaction) to keep this character on any device, or to check a $mihao holder badge. The companion-token CA is still TBA.</p>
+          <button id="connect-wallet" type="button">Sign in / link Solana wallet</button>
           <p id="wallet-status" class="fine"></p>
         </div>
       </div>

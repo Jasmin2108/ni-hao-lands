@@ -1,5 +1,5 @@
 // Ni Hao Lands — unofficial fan MMO prototype server.
-// No wallets, no fund movement, no token purchases. Not financial advice.
+// Wallet sign-in uses signMessage only. No fund movement, no token purchases. Not financial advice.
 
 const fs = require("fs");
 const path = require("path");
@@ -7,6 +7,9 @@ const http = require("http");
 const crypto = require("crypto");
 const express = require("express");
 const { WebSocketServer } = require("ws");
+const nacl = require("tweetnacl");
+const bs58 = require("bs58");
+const persist = require("./persist");
 
 const world = require("./world");
 const {
@@ -48,6 +51,9 @@ fs.mkdirSync(AVATAR_DIR, { recursive: true });
 const uploadByToken = new Map();
 const uploadByIp = new Map();
 const reportByToken = new Map();
+const authByIp = new Map();
+const authNonces = new Map();
+const SIGNIN_TTL_MS = 5 * 60 * 1000;
 
 function pruneRateMap(map, windowMs) {
   const now = Date.now();
@@ -88,22 +94,13 @@ function clientIp(req) {
 }
 
 function isCustomAvatarId(id) {
-  return typeof id === "string" && /^[a-f0-9]{16,32}$/.test(id);
-}
-
-function customAvatarFile(id) {
-  if (!isCustomAvatarId(id)) return null;
-  for (const ext of [".png", ".webp"]) {
-    const file = path.join(AVATAR_DIR, id + ext);
-    if (fs.existsSync(file)) return file;
-  }
-  return null;
+  return persist.isCustomAvatarId(id);
 }
 
 function isAllowedAvatar(id) {
   if (AVATARS.some((a) => a.id === id)) return true;
   if (typeof id === "string" && id.startsWith("u:")) {
-    return !!customAvatarFile(id.slice(2));
+    return persist.avatarExists(id.slice(2));
   }
   return false;
 }
@@ -114,13 +111,86 @@ function resolveAvatar(id) {
 
 function deleteCustomAvatar(avatar) {
   if (typeof avatar !== "string" || !avatar.startsWith("u:")) return;
-  const id = avatar.slice(2);
-  if (!isCustomAvatarId(id)) return;
-  for (const ext of [".png", ".webp"]) {
-    const file = path.join(AVATAR_DIR, id + ext);
-    if (fs.existsSync(file)) {
-      try { fs.unlinkSync(file); } catch (e) { console.error("[avatar] delete failed", e.message); }
-    }
+  persist.removeAvatar(avatar.slice(2)).catch((e) => console.error("[avatar] delete failed", e.message));
+}
+
+function signInMessage(pubkey, nonce) {
+  return (
+    "Ni Hao Lands sign-in\n" +
+    "Wallet: " + pubkey + "\n" +
+    "Nonce: " + nonce + "\n" +
+    "This signature only logs you in. It is not a transaction and costs nothing."
+  );
+}
+
+function shortWallet(pubkey) {
+  if (!pubkey || String(pubkey).length < 8) return "";
+  return String(pubkey).slice(0, 4) + "…" + String(pubkey).slice(-4);
+}
+
+function isSolanaPubkey(pubkey) {
+  try {
+    return Buffer.from(bs58.decode(String(pubkey || ""))).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+function decodeSignature(signature) {
+  if (Buffer.isBuffer(signature)) return signature.length === 64 ? signature : null;
+  if (signature && signature.type === "Buffer" && Array.isArray(signature.data)) {
+    const buf = Buffer.from(signature.data);
+    return buf.length === 64 ? buf : null;
+  }
+  if (Array.isArray(signature)) {
+    const buf = Buffer.from(signature);
+    return buf.length === 64 ? buf : null;
+  }
+  if (typeof signature !== "string" || !signature) return null;
+  try {
+    const buf = Buffer.from(bs58.decode(signature));
+    if (buf.length === 64) return buf;
+  } catch {}
+  try {
+    const buf = Buffer.from(signature, "base64");
+    if (buf.length === 64) return buf;
+  } catch {}
+  try {
+    const buf = Buffer.from(signature, "hex");
+    if (buf.length === 64) return buf;
+  } catch {}
+  return null;
+}
+
+function verifyWalletSig(pubkey, nonce, signature) {
+  const sig = decodeSignature(signature);
+  if (!sig || !isSolanaPubkey(pubkey)) return false;
+  const msg = Buffer.from(signInMessage(pubkey, nonce), "utf8");
+  const pub = Buffer.from(bs58.decode(pubkey));
+  try {
+    return nacl.sign.detached.verify(new Uint8Array(msg), new Uint8Array(sig), new Uint8Array(pub));
+  } catch {
+    return false;
+  }
+}
+
+function uniqueWalletName(preferred, pub) {
+  let base = "";
+  if (preferred && !validName(preferred)) base = String(preferred).trim();
+  if (!base) base = "Hao" + String(pub).slice(0, 4);
+  base = base.replace(/[^A-Za-z0-9_]/g, "").slice(0, 12) || "HaoFriend";
+  if (!persist.nameTaken(base)) return base;
+  for (let i = 1; i < 1000; i++) {
+    const n = (base.slice(0, 12) + i).slice(0, 16);
+    if (!persist.nameTaken(n)) return n;
+  }
+  return ("Hao" + crypto.randomBytes(4).toString("hex")).slice(0, 16);
+}
+
+function pruneNonces() {
+  const now = Date.now();
+  for (const [k, exp] of authNonces) {
+    if (now > exp) authNonces.delete(k);
   }
 }
 
@@ -185,15 +255,16 @@ function adminKeyOk(given) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function applyAvatar(account, avatar, persist) {
+function applyAvatar(account, avatar, doSave) {
   account.avatar = avatar;
+  persist.upsertAccount(account);
   for (const s of sessions.values()) {
-    if (s.account.token === account.token) {
+    if (s.account.id === account.id) {
       s.account.avatar = avatar;
       send(s.ws, { type: "me", me: mePayload(s) });
     }
   }
-  if (persist) saveAccounts();
+  if (doSave) saveAccounts();
   broadcastState();
 }
 
@@ -213,61 +284,66 @@ let mobs = staticWorld.mobs.map((m) => ({
   homeY: m.y,
 }));
 
-/** token -> saved player record */
-const accounts = new Map();
 /** ws -> live session */
 const sessions = new Map();
 const chatLog = [];
 const MAX_CHAT_LOG = 80;
 
-function loadAccounts() {
-  try {
-    if (!fs.existsSync(SAVE_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"));
-    const list = Array.isArray(raw) ? raw : raw.players || [];
-    for (const p of list) {
-      if (p && p.token && p.name) accounts.set(p.token, sanitizeAccount(p));
-    }
-    console.log(`[save] loaded ${accounts.size} accounts`);
-  } catch (e) {
-    console.error("[save] load failed", e.message);
-  }
+const accounts = {
+  get: (token) => persist.getByToken(token),
+  has: (token) => !!persist.getByToken(token),
+  values: () => persist.allAccounts(),
+  get size() { return persist.accountCount(); },
+};
+
+function hydrateAccount(a) {
+  if (!a) return a;
+  a.avatar = resolveAvatar(a.avatar);
+  a.skills = { ...emptySkills(), ...(a.skills || {}) };
+  a.hp = Math.max(1, Math.min(PLAYER_HP, a.hp || PLAYER_HP));
+  if (!Number.isFinite(a.x)) a.x = staticWorld.spawn.x;
+  if (!Number.isFinite(a.y)) a.y = staticWorld.spawn.y;
+  a.gold = Math.max(0, a.gold | 0);
+  if (!Array.isArray(a.inventory)) a.inventory = [];
+  if (!a.bank || typeof a.bank !== "object") a.bank = {};
+  if (!a.equipped || typeof a.equipped !== "object") a.equipped = {};
+  return a;
 }
 
-function sanitizeAccount(p) {
-  return {
-    token: String(p.token),
-    name: String(p.name).slice(0, 16),
-    avatar: resolveAvatar(p.avatar),
-    x: Number.isFinite(p.x) ? p.x : staticWorld.spawn.x,
-    y: Number.isFinite(p.y) ? p.y : staticWorld.spawn.y,
-    gold: Math.max(0, p.gold | 0),
-    hp: Math.max(1, Math.min(PLAYER_HP, p.hp | 0 || PLAYER_HP)),
-    skills: { ...emptySkills(), ...(p.skills || {}) },
-    inventory: Array.isArray(p.inventory) ? p.inventory.slice(0, INV_SIZE) : [],
-    bank: p.bank && typeof p.bank === "object" ? p.bank : {},
-    equipped: p.equipped && typeof p.equipped === "object" ? p.equipped : {},
-    created: p.created || Date.now(),
-  };
+function createAccount({ name, avatar, wallet }) {
+  return persist.upsertAccount(hydrateAccount({
+    id: persist.newAccountId(),
+    wallet: wallet || null,
+    name: String(name).slice(0, 16),
+    avatar: resolveAvatar(avatar),
+    x: staticWorld.spawn.x,
+    y: staticWorld.spawn.y,
+    gold: 15,
+    hp: PLAYER_HP,
+    skills: emptySkills(),
+    inventory: [{ id: "cooked_fish", qty: 2 }],
+    bank: {},
+    equipped: {},
+    created: Date.now(),
+  }));
 }
 
 function saveAccounts() {
-  try {
-    // flush live positions into accounts
-    for (const s of sessions.values()) {
-      if (s.account) Object.assign(accounts.get(s.account.token) || s.account, snapshot(s));
+  for (const s of sessions.values()) {
+    if (s.account) {
+      Object.assign(s.account, snapshot(s));
+      persist.upsertAccount(s.account);
     }
-    const players = [...accounts.values()];
-    fs.writeFileSync(SAVE_FILE, JSON.stringify({ savedAt: Date.now(), players }, null, 2));
-  } catch (e) {
-    console.error("[save] write failed", e.message);
   }
+  persist.markDirty();
+  return persist.save();
 }
 
 function snapshot(s) {
   const a = s.account;
   return {
-    token: a.token,
+    id: a.id,
+    wallet: a.wallet || null,
     name: a.name,
     avatar: a.avatar,
     x: s.x,
@@ -295,12 +371,8 @@ function validName(name) {
   return null;
 }
 
-function nameTaken(name, exceptToken) {
-  const lower = name.toLowerCase();
-  for (const a of accounts.values()) {
-    if (a.token !== exceptToken && a.name.toLowerCase() === lower) return true;
-  }
-  return false;
+function nameTaken(name, exceptId) {
+  return persist.nameTaken(name, exceptId);
 }
 
 function isProfane(text) {
@@ -360,7 +432,7 @@ function publicPlayer(s) {
   const z = zoneAt(s.x, s.y);
   return {
     id: s.id,
-    name: s.account.name,
+    name: s.account.name || shortWallet(s.account.wallet),
     avatar: s.account.avatar,
     x: Math.round(s.x * 100) / 100,
     y: Math.round(s.y * 100) / 100,
@@ -371,6 +443,8 @@ function publicPlayer(s) {
     action: s.action ? s.action.kind : null,
     holder: !!s.holderBadge,
     premiumName: !!s.account.equipped?.gold_nametag,
+    wallet: s.account.wallet || null,
+    walletLabel: shortWallet(s.account.wallet),
   };
 }
 
@@ -382,7 +456,7 @@ function mePayload(s) {
   }
   return {
     ...publicPlayer(s),
-    token: s.account.token,
+    token: s.token,
     gold: s.account.gold,
     skills,
     inventory: s.account.inventory,
@@ -742,11 +816,12 @@ function welcomePayload(s) {
   };
 }
 
-function newLive(ws, account) {
+function newLive(ws, account, token) {
   const s = {
     ws,
     id: "p_" + crypto.randomBytes(6).toString("hex"),
     account,
+    token,
     x: account.x,
     y: account.y,
     hp: account.hp || PLAYER_HP,
@@ -758,7 +833,7 @@ function newLive(ws, account) {
     chatTimes: [],
     lastZone: zoneAt(account.x, account.y).id,
     holderBadge: false,
-    wallet: null,
+    wallet: account.wallet || null,
   };
   sessions.set(ws, s);
   return s;
@@ -766,43 +841,40 @@ function newLive(ws, account) {
 
 function onHello(ws, msg) {
   let account = null;
-  if (msg.token && accounts.has(String(msg.token))) {
-    account = accounts.get(String(msg.token));
-    // Only change a returning player's avatar when the client explicitly sent a valid one
-    // (the login screen leaves this off unless the player picked a new preset).
-    if (msg.avatar && isAllowedAvatar(msg.avatar)) account.avatar = msg.avatar;
-  } else {
+  let token = null;
+  if (msg.token) {
+    account = persist.getByToken(String(msg.token));
+    if (account) {
+      token = String(msg.token);
+      // Only change a returning player's avatar when the client explicitly sent a valid one
+      // (the login screen leaves this off unless the player picked a new preset).
+      if (msg.avatar && isAllowedAvatar(msg.avatar)) {
+        account.avatar = msg.avatar;
+        persist.markDirty();
+      }
+    }
+  }
+  if (!account) {
     const err = validName(msg.name || "");
     if (err) { send(ws, { type: "error", text: err }); return; }
     const name = String(msg.name).trim();
     if (nameTaken(name)) { send(ws, { type: "error", text: "That name is already in this world." }); return; }
     const avatar = isAllowedAvatar(msg.avatar) ? msg.avatar : "classic-paw";
-    account = {
-      token: randToken(),
-      name,
-      avatar,
-      x: staticWorld.spawn.x,
-      y: staticWorld.spawn.y,
-      gold: 15,
-      hp: PLAYER_HP,
-      skills: emptySkills(),
-      inventory: [{ id: "cooked_fish", qty: 2 }],
-      bank: {},
-      equipped: {},
-      created: Date.now(),
-    };
-    accounts.set(account.token, account);
+    account = createAccount({ name, avatar });
+    const sess = persist.issueSession(account.id, { expire: false });
+    token = sess.token;
     saveAccounts();
   }
-  // already connected from another tab?
+  // already connected from another tab or device?
   for (const [other, s] of sessions) {
-    if (s.account.token === account.token && other !== ws) {
+    if (s.account.id === account.id && other !== ws) {
       send(other, { type: "error", text: "You signed in from another window." });
       other.close();
       sessions.delete(other);
     }
   }
-  const live = newLive(ws, account);
+  const live = newLive(ws, account, token);
+  if (account.wallet) live.wallet = account.wallet;
   send(ws, welcomePayload(live));
   systemChat(`${account.name} has arrived in Ni Hao Village.`);
   broadcastState();
@@ -983,19 +1055,28 @@ app.use(express.json({ limit: "32kb" }));
 app.use("/assets", express.static(path.join(__dirname, "assets"), { maxAge: "1h" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-app.get("/avatars/:id", (req, res) => {
+app.get("/avatars/:id", async (req, res) => {
   const id = String(req.params.id || "");
-  const file = customAvatarFile(id);
-  if (!file) return res.status(404).end();
-  const type = file.endsWith(".webp") ? "image/webp" : "image/png";
-  res.setHeader("Content-Type", type);
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Cache-Control", "public, max-age=86400, immutable");
-  res.sendFile(file);
+  try {
+    const rec = await persist.readAvatar(id);
+    if (!rec || !rec.buf) return res.status(404).end();
+    res.setHeader("Content-Type", rec.mime || "image/png");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+    res.end(rec.buf);
+  } catch {
+    res.status(404).end();
+  }
 });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, players: sessions.size, accounts: accounts.size, uptime: process.uptime() });
+  res.json({
+    ok: true,
+    players: sessions.size,
+    accounts: persist.accountCount(),
+    persist: persist.backend(),
+    uptime: process.uptime(),
+  });
 });
 
 app.get("/api/config", (_req, res) => {
@@ -1011,12 +1092,77 @@ app.get("/api/config", (_req, res) => {
 
 app.get("/api/account", (req, res) => {
   const token = String(req.query.token || "");
-  const account = accounts.get(token);
+  const account = persist.getByToken(token);
   if (!account) return res.status(404).json({ error: "Unknown account" });
-  res.json({ name: account.name, avatar: resolveAvatar(account.avatar) });
+  res.json({
+    name: account.name,
+    avatar: resolveAvatar(account.avatar),
+    wallet: account.wallet || null,
+    walletLabel: shortWallet(account.wallet),
+  });
 });
 
-function handleAvatarUpload(req, res) {
+app.get("/api/auth/nonce", (req, res) => {
+  if (hitWindow(authByIp, clientIp(req), 60000, 30)) {
+    return res.status(429).json({ error: "Too many sign-in attempts. Wait a moment." });
+  }
+  pruneNonces();
+  const nonce = crypto.randomBytes(16).toString("hex");
+  authNonces.set(nonce, Date.now() + SIGNIN_TTL_MS);
+  res.json({ nonce, expiresIn: SIGNIN_TTL_MS });
+});
+
+app.post("/api/auth/wallet", (req, res) => {
+  if (hitWindow(authByIp, clientIp(req), 60000, 30)) {
+    return res.status(429).json({ error: "Too many sign-in attempts. Wait a moment." });
+  }
+  const pubkey = String(req.body?.pubkey || "").trim();
+  const nonce = String(req.body?.nonce || "").trim();
+  const signature = req.body?.signature;
+  const linkToken = req.body?.token ? String(req.body.token) : "";
+  const requestedName = req.body?.name ? String(req.body.name) : "";
+
+  pruneNonces();
+  const expiresAt = authNonces.get(nonce);
+  if (!expiresAt || Date.now() > expiresAt) {
+    return res.status(400).json({ error: "Sign-in expired. Please try again." });
+  }
+  if (!isSolanaPubkey(pubkey)) return res.status(400).json({ error: "Invalid wallet address." });
+  if (!verifyWalletSig(pubkey, nonce, signature)) {
+    return res.status(400).json({ error: "Signature did not verify. This login is not a transaction." });
+  }
+  authNonces.delete(nonce);
+
+  let account = persist.getByWallet(pubkey);
+  const guest = linkToken ? persist.getByToken(linkToken) : null;
+  let linked = false;
+  if (account) {
+    // Wallet already has a character. A different guest character is left alone.
+  } else if (guest && !guest.wallet) {
+    guest.wallet = pubkey;
+    persist.upsertAccount(guest);
+    account = guest;
+    linked = true;
+  } else {
+    account = createAccount({ name: uniqueWalletName(requestedName, pubkey), avatar: "classic-paw", wallet: pubkey });
+  }
+  const sess = persist.issueSession(account.id, { expire: true });
+  persist.markDirty();
+  saveAccounts();
+  res.json({
+    ok: true,
+    token: sess.token,
+    expires: sess.expires,
+    name: account.name,
+    avatar: resolveAvatar(account.avatar),
+    wallet: pubkey,
+    walletLabel: shortWallet(pubkey),
+    linked,
+    note: "Signature only logged you in. No transaction was created or sent.",
+  });
+});
+
+async function handleAvatarUpload(req, res) {
   const ip = clientIp(req);
   // Count every attempt per IP (success or not) so a flood still gets a 429.
   // Token cooldown starts only after a successful save, so a bad file can be retried.
@@ -1024,7 +1170,7 @@ function handleAvatarUpload(req, res) {
     return res.status(429).json({ error: "Please wait a little before uploading again." });
   }
   const token = String(req.body?.token || "");
-  const account = accounts.get(token);
+  const account = persist.getByToken(token);
   if (!account) return res.status(401).json({ error: "Join the world once before uploading a picture." });
   if (wouldHitRateLimit(uploadByToken, token, AVATAR_UPLOAD_COOLDOWN_MS)) {
     return res.status(429).json({ error: "Please wait a little before uploading again." });
@@ -1034,10 +1180,9 @@ function handleAvatarUpload(req, res) {
   if (parsed.error) return res.status(400).json({ error: parsed.error });
 
   const id = crypto.randomBytes(12).toString("hex");
-  const ext = parsed.kind === "webp" ? ".webp" : ".png";
-  const dest = path.join(AVATAR_DIR, id + ext);
+  const mime = parsed.kind === "webp" ? "image/webp" : "image/png";
   try {
-    fs.writeFileSync(dest, parsed.buf);
+    await persist.putAvatar(id, mime, parsed.buf);
   } catch (e) {
     console.error("[avatar] write failed", e.message);
     return res.status(500).json({ error: "Could not save that picture." });
@@ -1053,7 +1198,7 @@ function handleAvatarUpload(req, res) {
 
 app.post("/api/report-avatar", (req, res) => {
   const token = String(req.body?.token || "");
-  const reporter = accounts.get(token);
+  const reporter = persist.getByToken(token);
   if (!reporter) return res.status(401).json({ error: "Sign in first." });
   if (hitRateLimit(reportByToken, token, 15000)) {
     return res.status(429).json({ error: "Please wait a little before reporting again." });
@@ -1155,8 +1300,9 @@ wss.on("connection", (ws, req) => {
     const s = sessions.get(ws);
     if (s) {
       Object.assign(s.account, snapshot(s));
-      accounts.set(s.account.token, s.account);
+      persist.upsertAccount(s.account);
       sessions.delete(ws);
+      saveAccounts();
       systemChat(`${s.account.name} has left.`);
       broadcastState();
     }
@@ -1164,29 +1310,41 @@ wss.on("connection", (ws, req) => {
   ws.on("error", () => {});
 });
 
-loadAccounts();
 let last = Date.now();
-const ticker = setInterval(() => {
-  const now = Date.now();
-  const dt = Math.min(0.25, (now - last) / 1000);
-  last = now;
-  tick(dt, now);
-}, TICK_MS);
-
-const saveTimer = setInterval(saveAccounts, 20000);
+let ticker = null;
+let saveTimer = null;
 
 function shutdown() {
   console.log("[server] shutting down, saving...");
-  saveAccounts();
-  clearInterval(ticker);
-  clearInterval(saveTimer);
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 2000);
+  if (ticker) clearInterval(ticker);
+  if (saveTimer) clearInterval(saveTimer);
+  Promise.resolve(saveAccounts())
+    .then(() => persist.close())
+    .finally(() => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 2000);
+    });
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-server.listen(PORT, HOST, () => {
-  console.log(`[Ni Hao Lands] unofficial fan MMO listening on http://${HOST}:${PORT}`);
-  console.log("Not financial advice. No token purchases. Art from the mihao pfps Meme Depot community.");
+async function main() {
+  await persist.init({ dataDir: DATA_DIR, avatarDir: AVATAR_DIR });
+  for (const a of persist.allAccounts()) hydrateAccount(a);
+  ticker = setInterval(() => {
+    const now = Date.now();
+    const dt = Math.min(0.25, (now - last) / 1000);
+    last = now;
+    tick(dt, now);
+  }, TICK_MS);
+  saveTimer = setInterval(() => { saveAccounts(); }, 20000);
+  server.listen(PORT, HOST, () => {
+    console.log(`[Ni Hao Lands] unofficial fan MMO listening on http://${HOST}:${PORT} (${persist.backend()} store)`);
+    console.log("Not financial advice. No token purchases. Wallet sign-in uses signMessage only. Art from the mihao pfps Meme Depot community.");
+  });
+}
+
+main().catch((e) => {
+  console.error("[server] failed to start", e);
+  process.exit(1);
 });

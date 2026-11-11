@@ -276,6 +276,7 @@
         refreshTabs();
         resize();
         maybeUploadPending();
+        maybeHolderCheck();
         break;
       case "state":
         state.players = msg.players || [];
@@ -323,6 +324,8 @@
     $("gold").textContent = (me.gold | 0) + " gold";
     $("hp").textContent = me.hp | 0;
     $("holder-badge").hidden = !me.holder;
+    const wb = $("connect-wallet");
+    if (wb) wb.textContent = me.wallet ? "Refresh holder check" : "Sign in / link Solana wallet";
     const al = $("action-label");
     if (me.action) {
       al.hidden = false;
@@ -844,6 +847,89 @@
     b.addEventListener("click", () => openTab(b.dataset.tab));
   });
 
+  function bytesToBase64(bytes) {
+    let bin = "";
+    const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+    return btoa(bin);
+  }
+
+  function findWalletProvider() {
+    const w = window;
+    const cands = [w.solana, w.phantom && w.phantom.solana, w.solflare, w.backpack, w.glow, w.nightly && w.nightly.solana];
+    return cands.find((p) => p && typeof p.signMessage === "function") || null;
+  }
+
+  function setWalletDeepLinks(show) {
+    const box = $("wallet-deeplinks");
+    if (!box) return;
+    box.hidden = !show;
+    if (!show) return;
+    const page = location.href.split("#")[0];
+    const origin = location.origin;
+    const encPage = encodeURIComponent(page);
+    const encRef = encodeURIComponent(origin);
+    $("open-phantom").href = "https://phantom.app/ul/browse/" + encPage + "?ref=" + encRef;
+    $("open-solflare").href = "https://solflare.com/ul/v1/browse/" + encPage + "?ref=" + encRef;
+  }
+
+  async function signInWithWallet(opts) {
+    const provider = findWalletProvider();
+    if (!provider) {
+      setWalletDeepLinks(true);
+      throw new Error("No Solana wallet found in this browser. Open the game in Phantom or Solflare.");
+    }
+    setWalletDeepLinks(false);
+    if (typeof provider.connect === "function") {
+      await provider.connect();
+    }
+    const pubkey = provider.publicKey && (provider.publicKey.toBase58 ? provider.publicKey.toBase58() : String(provider.publicKey));
+    if (!pubkey) throw new Error("Wallet did not share an address.");
+    const nr = await fetch("/api/auth/nonce").then((r) => r.json());
+    if (!nr.nonce) throw new Error(nr.error || "Couldn't start sign-in.");
+    const message = "Ni Hao Lands sign-in\nWallet: " + pubkey + "\nNonce: " + nr.nonce + "\nThis signature only logs you in. It is not a transaction and costs nothing.";
+    const encoded = new TextEncoder().encode(message);
+    const raw = await provider.signMessage(encoded, "utf8");
+    const sigBytes = raw && raw.signature ? raw.signature : raw;
+    if (!sigBytes) throw new Error("Wallet did not return a signature.");
+    const body = {
+      pubkey,
+      nonce: nr.nonce,
+      signature: bytesToBase64(sigBytes),
+    };
+    const token = (opts && opts.token) || (state.me && state.me.token) || localStorage.getItem("nhl-token");
+    if (token) body.token = token;
+    const name = ($("name") && $("name").value.trim()) || (state.me && state.me.name) || "";
+    if (name) body.name = name;
+    const r = await fetch("/api/auth/wallet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Wallet sign-in failed.");
+    if (j.token) localStorage.setItem("nhl-token", j.token);
+    if (j.name) localStorage.setItem("nhl-name", j.name);
+    return j;
+  }
+
+  async function maybeHolderCheck() {
+    const wallet = state.me && state.me.wallet;
+    if (!wallet) return;
+    try {
+      const r = await fetch("/api/holder/" + encodeURIComponent(wallet)).then((x) => x.json());
+      if (r && !r.error) {
+        send({ type: "wallet", address: wallet, holder: !!r.holder });
+        const status = $("wallet-status");
+        if (status) {
+          status.textContent = "Signed in " + (state.me.walletLabel || wallet.slice(0, 4) + "…" + wallet.slice(-4)) +
+            ". $mihao: " + (r.mihao && r.mihao.uiAmount != null ? r.mihao.uiAmount : 0) +
+            ". No transaction was created.";
+        }
+      }
+    } catch {}
+  }
+
   $("enter").addEventListener("click", () => {
     showLoginError("");
     const name = $("name").value.trim();
@@ -899,6 +985,22 @@
     if (e.key === "Enter") $("enter").click();
   });
 
+  $("wallet-signin").addEventListener("click", async () => {
+    showLoginError("");
+    $("wallet-signin").disabled = true;
+    try {
+      const j = await signInWithWallet({ token: localStorage.getItem("nhl-token") });
+      if (j.name && $("name")) $("name").value = j.name;
+      const hello = { type: "hello", name: j.name };
+      hello.token = j.token;
+      connect(hello);
+    } catch (err) {
+      showLoginError(err.message || "Wallet sign-in failed.");
+    } finally {
+      $("wallet-signin").disabled = false;
+    }
+  });
+
   $("chat-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const text = $("chat-input").value;
@@ -920,29 +1022,28 @@
 
   async function connectWallet() {
     const status = $("wallet-status");
-    const provider = window.solana;
-    if (!provider || !provider.isPhantom) {
-      status.textContent = "Phantom is not installed in this browser. Wallet connect is a preview only — the game will never ask you to sign a purchase.";
-      toast("Phantom not found. Purchases are disabled.");
+    if (state.me && state.me.wallet) {
+      status.textContent = "Checking $mihao balance for " + (state.me.walletLabel || state.me.wallet) + "…";
+      await maybeHolderCheck();
       return;
     }
     try {
-      const res = await provider.connect({ onlyIfTrusted: false });
-      const address = res.publicKey.toString();
-      state.wallet = address;
-      status.textContent = "Connected (read-only): " + address.slice(0, 4) + "…" + address.slice(-4) + ". Checking $mihao balance…";
-      const r = await fetch("/api/holder/" + address).then((x) => x.json());
-      if (r.error) {
-        status.textContent = "Connected " + address.slice(0, 4) + "…" + address.slice(-4) + " — balance check failed: " + r.error;
-        send({ type: "wallet", address, holder: false });
-        return;
+      const j = await signInWithWallet({ token: state.me && state.me.token });
+      if (state.me) {
+        state.me.wallet = j.wallet;
+        state.me.walletLabel = j.walletLabel;
+        if (j.token) {
+          state.me.token = j.token;
+          localStorage.setItem("nhl-token", j.token);
+        }
       }
-      status.textContent = `Connected ${address.slice(0, 4)}…${address.slice(-4)}. $mihao: ${r.mihao?.uiAmount ?? 0}` +
-        (r.companion ? ` · companion: ${r.companion.uiAmount}` : " · companion token CA still TBA") +
-        ". No transaction was created.";
-      send({ type: "wallet", address, holder: !!r.holder });
-    } catch (e) {
-      status.textContent = "Connect cancelled or failed. No transaction was created.";
+      toast(j.linked ? "This character is now linked to your wallet." : "Signed in with your wallet. No transaction was sent.");
+      const btn = $("connect-wallet");
+      if (btn) btn.textContent = "Refresh holder check";
+      await maybeHolderCheck();
+    } catch (err) {
+      status.textContent = (err.message || "Wallet sign-in failed.") + " No transaction was created.";
+      toast(err.message || "Wallet sign-in failed.");
     }
   }
 

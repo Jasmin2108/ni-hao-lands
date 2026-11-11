@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <title>Ni Hao Lands — unofficial fan MMO</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="login" class="screen">
+    <div class="login-card">
+      <p class="eyebrow">你好，朋友 · unofficial fan world</p>
+      <h1>Ni Hao Lands</h1>
+      <p class="tagline">A RuneScape-style hangout for the $mihao movement. Grind fish, yarn, and ore. Talk in the village. No real-money shop.</p>
+      <label>Adventurer name
+        <input id="name" maxlength="16" placeholder="e.g. HaoFriend" autocomplete="off" />
+      </label>
+      <p class="pick-label">Pick a Meme Depot PFP</p>
+      <div id="avatar-grid" class="avatar-grid"></div>
+      <button id="enter" type="button">Enter world</button>
+      <p id="login-error" class="error" hidden></p>
+      <p class="fine">Returning? Your last name is restored automatically if this browser has a token.</p>
+    </div>
+  </div>
+
+  <div id="game" class="screen" hidden>
+    <div class="topbar">
+      <div class="brand">
+        <strong>Ni Hao Lands</strong>
+        <span id="zone-name">Ni Hao Village</span>
+      </div>
+      <div class="status">
+        <span id="player-name"></span>
+        <span id="holder-badge" hidden title="Read-only $mihao balance check">持有 holder</span>
+        <span class="gold" id="gold">0 gold</span>
+        <span id="hp-wrap">HP <span id="hp">20</span>/20</span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <canvas id="view"></canvas>
+      <div id="minimap-wrap"><canvas id="minimap" width="160" height="120"></canvas></div>
+      <div id="toasts"></div>
+      <div id="examine" hidden></div>
+      <div id="action-label" hidden></div>
+    </div>
+
+    <aside class="panel">
+      <div class="tabs">
+        <button data-tab="skills" class="on">Skills</button>
+        <button data-tab="inv">Inventory</button>
+        <button data-tab="shop">Shop</button>
+        <button data-tab="bank">Bank</button>
+        <button data-tab="premium">Premium</button>
+      </div>
+      <div id="tab-skills" class="tab on"></div>
+      <div id="tab-inv" class="tab"></div>
+      <div id="tab-shop" class="tab"></div>
+      <div id="tab-bank" class="tab"></div>
+      <div id="tab-premium" class="tab">
+        <p class="warn">Premium shop is a <strong>design stub</strong>. Nothing here can spend tokens or SOL. There is no purchase transaction in this game.</p>
+        <div id="premium-list"></div>
+        <div class="wallet-box">
+          <h3>Wallet (read-only)</h3>
+          <p>Connect Phantom to check a $mihao holder badge. The game never asks you to sign a transfer, and the companion-token CA is still TBA.</p>
+          <button id="connect-wallet" type="button">Connect wallet (coming soon)</button>
+          <p id="wallet-status" class="fine"></p>
+        </div>
+      </div>
+    </aside>
+
+    <div class="chat-dock">
+      <div id="chat-log" class="chat-log"></div>
+      <form id="chat-form">
+        <input id="chat-input" maxlength="140" placeholder="Say 你好 to the village…" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+
+    <footer>
+      Unofficial fan game, not affiliated with the $mihao team or the real cat’s owner. Not financial advice.
+      Art from the <a href="https://memedepot.com/d/mihao-pfps" target="_blank" rel="noopener">mihao pfps Meme Depot</a> community.
+      $mihao CA <button type="button" class="ca" id="copy-ca" title="Copy contract">4CxjZyMNoF1p6eXHXHv1TWpS2X47CuUmLwtGe18spump</button>
+      · <a href="https://dexscreener.com/solana/ho1asg6wgh1ffxdehrk2f4ggt1hoxo9s5jclmdqeyebz" target="_blank" rel="noopener">DexScreener chart</a>
+      · Companion token CA: <span id="companion-ca" class="placeholder"><!-- COMPANION_TOKEN_CA_PLACEHOLDER -->TBA — paste address here after launch</span>
+    </footer>
+  </div>
+
+  <script src="/game.js"></script>
+</body>
+</html>

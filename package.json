@@ -1,0 +1,18 @@
+{
+  "name": "ni-hao-lands",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial fan RuneScape-style browser MMO prototype for the $mihao community. Not financial advice.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test:clients": "node test-two-clients.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.3"
+  }
+}

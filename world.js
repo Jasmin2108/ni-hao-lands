@@ -88,6 +88,15 @@ const ITEMS = {
   golden_bamboo: { id: "golden_bamboo", name: "Golden Bamboo", stack: true, holderDrop: true, desc: "A cane that shines like gold. A rare $nihala holder find.", sell: 8 },
   golden_yarn: { id: "golden_yarn", name: "Golden Yarn", stack: true, holderDrop: true, desc: "Glittering yarn. A rare $nihala holder find.", sell: 8 },
 
+  // $nihala holder shop (unlock by holding; never purchased). Usable only while the signed-in wallet still holds enough.
+  // Speeds stay at or below crafted jade (0.68) so shop tools don't quietly outpace public gathering ranks.
+  harbor_charm_rod: { id: "harbor_charm_rod", name: "Harbor Charm Rod", stack: false, tool: "rod", toolTier: 2, toolLevel: 1, toolSpeed: 0.74, slot: "rod", holderOnly: true, holdMin: 100000, desc: "A charm-strung harbor rod. Unlock by holding 100,000 $nihala. Iron-tier catches, quicker than the free holder rod. Works only while you hold enough $nihala.", sell: 0 },
+  shrine_charm_axe: { id: "shrine_charm_axe", name: "Shrine Charm Axe", stack: false, tool: "axe", toolTier: 2, toolLevel: 1, toolSpeed: 0.74, slot: "axe", holderOnly: true, holdMin: 250000, desc: "A shrine-blessed axe. Unlock by holding 250,000 $nihala. Iron-tier chopping, quicker than the free holder axe. Works only while you hold enough $nihala.", sell: 0 },
+  quarry_charm_pickaxe: { id: "quarry_charm_pickaxe", name: "Quarry Charm Pickaxe", stack: false, tool: "pickaxe", toolTier: 2, toolLevel: 1, toolSpeed: 0.74, slot: "pickaxe", holderOnly: true, holdMin: 500000, desc: "A quarry charm pickaxe. Unlock by holding 500,000 $nihala. Iron-tier mining, quicker than the free holder pick. Works only while you hold enough $nihala.", sell: 0 },
+  lantern_jade_rod: { id: "lantern_jade_rod", name: "Lantern Jade Rod", stack: false, tool: "rod", toolTier: 3, toolLevel: 1, toolSpeed: 0.68, slot: "rod", holderOnly: true, holdMin: 1000000, desc: "A lantern-lit jade rod. Unlock by holding 1,000,000 $nihala. Matches a crafted jade rod (every fish, including golden koi) without the smithing level. Works only while you hold enough $nihala.", sell: 0 },
+  lantern_jade_axe: { id: "lantern_jade_axe", name: "Lantern Jade Axe", stack: false, tool: "axe", toolTier: 3, toolLevel: 1, toolSpeed: 0.68, slot: "axe", holderOnly: true, holdMin: 2500000, desc: "A lantern-lit jade axe. Unlock by holding 2,500,000 $nihala. Matches a crafted jade axe (every tree, including cherry) without the smithing level. Works only while you hold enough $nihala.", sell: 0 },
+  lantern_jade_pickaxe: { id: "lantern_jade_pickaxe", name: "Lantern Jade Pickaxe", stack: false, tool: "pickaxe", toolTier: 3, toolLevel: 1, toolSpeed: 0.68, slot: "pickaxe", holderOnly: true, holdMin: 5000000, desc: "A lantern-lit jade pickaxe. Unlock by holding 5,000,000 $nihala. Matches a crafted jade pickaxe (every ore, including jade) without the smithing level. Works only while you hold enough $nihala.", sell: 0 },
+
   bronze_sword: { id: "bronze_sword", name: "Bronze Sword", stack: false, slot: "weapon", atk: 3, desc: "A short bronze blade.", sell: 18 },
   iron_sword: { id: "iron_sword", name: "Iron Sword", stack: false, slot: "weapon", atk: 6, desc: "A sturdy iron blade.", sell: 45 },
   jade_sword: { id: "jade_sword", name: "Jade Sword", stack: false, slot: "weapon", atk: 10, desc: "A gleaming jade blade.", sell: 95 },
@@ -138,6 +147,16 @@ const PREMIUM_SHOP = [
   { id: "gold_nametag", name: "Golden Nametag", priceToken: 50, desc: "Your name draws in gold for everyone. Planned $nihala holder cosmetic (not for sale)." },
   { id: "shrine_pet", name: "Shrine Pet (cosmetic)", priceToken: 150, desc: "A tiny maneki follower. Planned $nihala holder cosmetic (not for sale)." },
   { id: "premium_cape", name: "Premium Cape", priceToken: 100, desc: "A ceremonial cape. Planned $nihala holder cosmetic (not for sale)." },
+];
+
+// Holder shop: unlock by holding $nihala (read-only balance). Nothing is spent. Thresholds are whole tokens.
+const HOLDER_SHOP = [
+  { itemId: "harbor_charm_rod", hold: 100000 },
+  { itemId: "shrine_charm_axe", hold: 250000 },
+  { itemId: "quarry_charm_pickaxe", hold: 500000 },
+  { itemId: "lantern_jade_rod", hold: 1000000 },
+  { itemId: "lantern_jade_axe", hold: 2500000 },
+  { itemId: "lantern_jade_pickaxe", hold: 5000000 },
 ];
 
 const MIHAO_MINT = "4CxjZyMNoF1p6eXHXHv1TWpS2X47CuUmLwtGe18spump";
@@ -808,7 +827,7 @@ function buildWorld() {
     { id: "npc-banker", name: "Banker Bao", role: "bank", x: 21, y: 22, avatar: "suit", examine: "Banker Bao keeps everyone's yarn safe." },
     { id: "npc-merchant", name: "Merchant Mao", role: "shop", x: 42, y: 22, avatar: "coat", examine: "Merchant Mao sells cosmetics, food, and starter tools for in-game gold." },
     { id: "npc-chef", name: "Chef Chou", role: "cook", x: 23, y: 33, avatar: "bonnet", examine: "Chef Chou minds the village range. Click the range to cook fish." },
-    { id: "npc-greeter", name: "Old Maneki", role: "greet", x: 32, y: 26, avatar: "classic-paw", examine: "你好，朋友. Welcome to Ni Hao Village." },
+    { id: "npc-greeter", name: "Old Maneki", role: "greet", x: 32, y: 26, avatar: "classic-paw", examine: "你好，朋友. Welcome to Ni Hao Village. The $nihala tab has a holder shop — unlock tools by holding $nihala, nothing is spent." },
     { id: "npc-smith", name: "Smith Lin", role: "smith", x: 40, y: 32, avatar: "knight", examine: "Smith Lin minds the furnace and anvil. Smelt ore, then smith bars into tools." },
     { id: "npc-harbor", name: "Harbor Hao", role: "greet", x: 17, y: 53, avatar: "coat", examine: "Deeper water holds koi. Bring a better rod, and mind the waves." },
     { id: "npc-shrine", name: "Shrine Mei", role: "greet", x: 108, y: 49, avatar: "bonnet", examine: "The inner shrine is for seasoned fighters. Train first, then enter." },
@@ -833,7 +852,7 @@ function buildWorld() {
 }
 
 module.exports = {
-  W, H, AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP, QUESTS, ZONES,
+  W, H, AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP, HOLDER_SHOP, QUESTS, ZONES,
   RESOURCE_TIERS, SMELT_RECIPES, SMITH_RECIPES,
   MIHAO_MINT, MIHAO_TOKEN_PROGRAM, DEXSCREENER,
   levelFromXp, xpToNext, emptySkills, emptyQuests, normalizeQuests, rollFishKg,

@@ -16,7 +16,8 @@ import { WebSocket } from "ws";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const { createHolderChecker, TOKEN_PROGRAM, TOKEN_2022_PROGRAM } = require("./holders.js");
+const { createHolderChecker, TOKEN_PROGRAM, TOKEN_2022_PROGRAM, NIHALA_DECIMALS, wholeTokenBalance, holdsAtLeast, rawAmountFromWhole } = require("./holders.js");
+const { HOLDER_SHOP, ITEMS } = require("./world.js");
 const NIHALA = "FNkoLTsBFEMjhM6qwUhnRwAzJcSCURfgeEmC1hGcsHao";
 const OTHER_MINT = "So11111111111111111111111111111111111111112";
 const LIVE = process.argv[2] || "";
@@ -66,9 +67,15 @@ async function freePort(start) {
 const balances = new Map(); // owner -> { token: ui, token2022: ui }
 const methods = new Set();
 let rpcCalls = 0, rpcFail = false, mintFilterFail = false;
-function tokenAcc(mint, ui, decimals = 6) {
-  const amount = String(Math.round(ui * 10 ** decimals));
-  return { pubkey: "acc" + Math.random().toString(36).slice(2), account: { data: { parsed: { info: { mint, tokenAmount: { amount, decimals, uiAmount: ui, uiAmountString: String(ui) } } } } } };
+function tokenAcc(mint, ui, decimals = 6, amount) {
+  if (amount == null) amount = String(Math.round(Number(ui) * 10 ** decimals));
+  const uiNum = typeof ui === "number" ? ui : Number(ui);
+  return { pubkey: "acc" + Math.random().toString(36).slice(2), account: { data: { parsed: { info: { mint, tokenAmount: { amount: String(amount), decimals, uiAmount: uiNum, uiAmountString: String(ui) } } } } } };
+}
+function accFor(entry, program) {
+  if (entry && typeof entry === "object") return { ...tokenAcc(NIHALA, entry.ui, entry.decimals || 6, entry.amount), program };
+  if (entry) return { ...tokenAcc(NIHALA, entry), program };
+  return null;
 }
 function rpcHandler(body) {
   rpcCalls++;
@@ -81,13 +88,13 @@ function rpcHandler(body) {
   if (filter.mint) {
     if (mintFilterFail) return { jsonrpc: "2.0", id: body.id, error: { code: 429, message: "mock rate limit" } };
     if (filter.mint === NIHALA) {
-      if (b.token) value.push({ ...tokenAcc(NIHALA, b.token), program: TOKEN_PROGRAM });
-      if (b.token2022) value.push({ ...tokenAcc(NIHALA, b.token2022), program: TOKEN_2022_PROGRAM });
+      const a = accFor(b.token, TOKEN_PROGRAM); if (a) value.push(a);
+      const b22 = accFor(b.token2022, TOKEN_2022_PROGRAM); if (b22) value.push(b22);
     }
     return { jsonrpc: "2.0", id: body.id, result: { context: { slot: 1 }, value } };
   }
-  if (filter.programId === TOKEN_PROGRAM) { if (b.token) value.push(tokenAcc(NIHALA, b.token)); value.push(tokenAcc(OTHER_MINT, 5, 9)); }
-  else if (filter.programId === TOKEN_2022_PROGRAM) { if (b.token2022) value.push(tokenAcc(NIHALA, b.token2022)); }
+  if (filter.programId === TOKEN_PROGRAM) { const a = accFor(b.token); if (a) value.push(a); value.push(tokenAcc(OTHER_MINT, 5, 9)); }
+  else if (filter.programId === TOKEN_2022_PROGRAM) { const a = accFor(b.token2022); if (a) value.push(a); }
   return { jsonrpc: "2.0", id: body.id, result: { context: { slot: 1 }, value } };
 }
 function startMockRpc() {
@@ -100,7 +107,37 @@ function startMockRpc() {
   });
 }
 
+function thresholdTests() {
+  assert(NIHALA_DECIMALS === 6, "on-chain $nihala decimals are 6");
+  assert(rawAmountFromWhole(100000) === "100000000000", "100,000 whole tokens at 6 decimals is 100000000000 raw");
+  assert(rawAmountFromWhole(100000, 9) === "100000000000000", "same whole-token threshold converts with a different decimal count");
+  const justUnder = { amount: "99999999999", balance: 99999.999999 };
+  const exact = { amount: "100000000000", balance: 100000 };
+  const aBitOver = { amount: "100000000001", balance: 100000.000001 };
+  assert(wholeTokenBalance(justUnder) === 99999n, "floors 99,999.999999 $nihala to 99,999 whole tokens");
+  assert(wholeTokenBalance(exact) === 100000n, "100,000 raw-converted units is 100,000 whole tokens");
+  assert(wholeTokenBalance(aBitOver) === 100000n, "100,000.000001 still floors to 100,000 whole tokens");
+  assert(!holdsAtLeast(justUnder, 100000), "just under 100k does not meet the 100k threshold");
+  assert(holdsAtLeast(exact, 100000), "exactly 100k unlocks the 100k tier");
+  assert(holdsAtLeast(aBitOver, 100000), "slightly over 100k still unlocks");
+  assert(!holdsAtLeast(exact, 250000), "100k does not unlock a 250k item");
+  assert(holdsAtLeast({ amount: rawAmountFromWhole(250000) }, 250000), "250k raw meets the 250k tier");
+  // ui fallback when raw amount is missing
+  assert(wholeTokenBalance({ balance: 100000.9 }) === 100000n, "ui balance fallback floors to whole tokens");
+  assert(!holdsAtLeast({ balance: 99999.9 }, 100000), "ui fallback rejects a fractional amount under the threshold");
+  // any-balance holder perks (holdMin 0) need a positive balance, not merely >= 0
+  assert(!holdsAtLeast({ amount: "0", balance: 0, holder: false }, 0), "zero balance is not a holder");
+  assert(holdsAtLeast({ amount: "1", balance: 0.000001, holder: true }, 0), "any positive balance still counts as a holder");
+  const holds = new Set(HOLDER_SHOP.map((o) => o.hold));
+  assert(HOLDER_SHOP[0].hold === 100000, "cheapest holder shop item starts at 100,000 $nihala");
+  assert(HOLDER_SHOP.every((o, i) => i === 0 || o.hold > HOLDER_SHOP[i - 1].hold), "shop hold prices step up");
+  assert(holds.size === HOLDER_SHOP.length, "each shop item has a distinct hold price");
+  assert(HOLDER_SHOP.every((o) => ITEMS[o.itemId] && ITEMS[o.itemId].holderOnly && ITEMS[o.itemId].holdMin === o.hold && ITEMS[o.itemId].sell === 0), "shop items are holder-only, unsellable, and carry holdMin");
+  assert(HOLDER_SHOP.every((o) => (ITEMS[o.itemId].toolSpeed || 1) >= 0.68), "shop tools are no faster than crafted jade (0.68), so they don't quietly outpace gathering ranks");
+}
+
 async function unitTests(rpcUrl) {
+  thresholdTests();
   const a = keypair().pub, b = keypair().pub;
   balances.set(a, { token: 10, token2022: 2.5 });
   const chk = createHolderChecker({ rpc: rpcUrl, mint: NIHALA, minBalance: 0, cacheMs: 400 });
@@ -206,9 +243,75 @@ async function localTests() {
     assert(!cg.me.nihalaStatus.signedIn && cg.me.nihala === false, "guest claiming someone else's wallet gets no $nihala perks");
     cg.close();
 
+    // ---- holder shop: unlock by holding, live access, no transfers ----
+    assert(cfg.nihalaDecimals === 6 && cfg.purchasesEnabled === false, "config exposes $nihala decimals and keeps purchases disabled");
+    assert(Array.isArray(cfg.holderShop) && cfg.holderShop[0].hold === 100000 && cfg.holderShop.every((o, i) => i === 0 || o.hold > cfg.holderShop[i - 1].hold), "config lists the holder shop starting at 100k, prices stepping up");
+
+    const C = keypair();
+    balances.set(C.pub, { token2022: { ui: 99999.999999, amount: "99999999999" } });
+    const lc = await walletLogin(base, C, testName());
+    const cc = client(base, lc.name, lc.token); await cc.open;
+    await cc.until((c) => c.welcome && c.me && c.me.nihalaStatus && c.me.nihalaStatus.checkedAt, 8000, "shop wallet check");
+    assert(Array.isArray(cc.welcome.holderShop) && cc.welcome.holderShop[0].itemId === "harbor_charm_rod", "welcome carries the holder shop catalog");
+    assert(cc.me.nihalaStatus.shop.every((o) => o.unlocked === false), "99,999.999999 $nihala leaves every shop tier locked");
+    cc.send({ type: "holderShopUnlock", itemId: "harbor_charm_rod" });
+    await sleep(400);
+    assert(!cc.me.inventory.some((i) => i.id === "harbor_charm_rod") && cc.toasts.some((t) => /Hold 100,000 \$nihala to unlock/.test(t)), "server rejects an unlock below the 100k threshold");
+    cc.send({ type: "holderShopUnlock", itemId: "harbor_charm_rod", unlocked: true, balance: 5000000 });
+    await sleep(400);
+    assert(!cc.me.inventory.some((i) => i.id === "harbor_charm_rod"), "client-spoofed unlock fields are ignored");
+
+    balances.set(C.pub, { token2022: 100000 });
+    cc.send({ type: "holderCheck" });
+    await cc.until((c) => c.me.nihalaStatus && c.me.nihalaStatus.shop.some((o) => o.itemId === "harbor_charm_rod" && o.unlocked), 8000, "100k unlocks first tier");
+    assert(cc.me.nihalaStatus.shop.find((o) => o.itemId === "shrine_charm_axe").unlocked === false, "100k does not unlock the 250k axe");
+    cc.send({ type: "holderShopUnlock", itemId: "harbor_charm_rod" });
+    await cc.until((c) => c.me.inventory.some((i) => i.id === "harbor_charm_rod"), 4000, "unlock harbor rod");
+    assert(cc.toasts.some((t) => /unlock the Harbor Charm Rod by holding 100,000 \$nihala/.test(t) && /Nothing was spent/.test(t)), "unlock copy is hold-based and says nothing was spent");
+    cc.send({ type: "holderShopUnlock", itemId: "shrine_charm_axe" });
+    await sleep(400);
+    assert(!cc.me.inventory.some((i) => i.id === "shrine_charm_axe"), "250k axe stays locked at a 100k balance");
+    cc.send({ type: "holderShopUnlock", itemId: "harbor_charm_rod" });
+    await sleep(300);
+    assert(cc.me.inventory.filter((i) => i.id === "harbor_charm_rod").length === 1, "already-unlocked shop items are not granted again");
+    cc.send({ type: "shopBuy", itemId: "harbor_charm_rod" });
+    await sleep(300);
+    assert(cc.toasts.some((t) => /doesn't sell that/.test(t)), "gold shop will not sell holder shop tools");
+    cc.send({ type: "equip", itemId: "harbor_charm_rod" });
+    await cc.until((c) => Object.values(c.me.equipped || {}).includes("harbor_charm_rod"), 4000, "equip shop rod");
+    assert(true, "100k holder can equip the Harbor Charm Rod");
+
+    // drop below 100k but stay a holder (>0): shop item is unequipped and unusable; free holder tools still work
+    balances.set(C.pub, { token: 50 });
+    await cc.until((c) => c.me.nihalaStatus && !Object.values(c.me.equipped || {}).includes("harbor_charm_rod") && c.me.nihalaStatus.holder, 10000, "shop unequip");
+    assert(cc.me.inventory.some((i) => i.id === "harbor_charm_rod"), "dropping below 100k does not delete the unlocked item");
+    assert(cc.toasts.some((t) => /unequipped/.test(t) && /100,000 \$nihala/.test(t)), "dropping below the tier unequips the shop tool");
+    cc.send({ type: "equip", itemId: "harbor_charm_rod" });
+    await sleep(400);
+    assert(!Object.values(cc.me.equipped || {}).includes("harbor_charm_rod"), "shop tool cannot be equipped under its hold threshold");
+    cc.send({ type: "holderClaim", itemId: "lucky_pickaxe" });
+    await cc.until((c) => c.me.inventory.some((i) => i.id === "lucky_pickaxe"), 4000, "free holder pick");
+    assert(true, "any-balance holder perks still work at 50 $nihala");
+
+    balances.set(C.pub, { token2022: 250000 });
+    await cc.until((c) => c.me.nihalaStatus && c.me.nihalaStatus.shop.find((o) => o.itemId === "shrine_charm_axe").unlocked, 10000, "250k resume");
+    cc.send({ type: "equip", itemId: "harbor_charm_rod" });
+    await cc.until((c) => Object.values(c.me.equipped || {}).includes("harbor_charm_rod"), 4000, "re-equip after hold returns");
+    assert(true, "shop tool can be equipped again once the wallet holds enough");
+    cc.send({ type: "holderShopUnlock", itemId: "shrine_charm_axe" });
+    await cc.until((c) => c.me.inventory.some((i) => i.id === "shrine_charm_axe"), 4000, "unlock shrine axe");
+    assert(true, "250k holder unlocks the Shrine Charm Axe");
+    cc.send({ type: "premiumBuy", itemId: "harbor_charm_rod" });
+    await sleep(300);
+    assert(cc.toasts.some((t) => /not enabled/.test(t)), "premiumBuy remains a disabled stub");
+    cc.close();
+
     const api = await fetch(base + "/api/holder/" + A.pub).then((r) => r.json());
     assert(api.nihala && api.nihala.holder === true, "/api/holder reports the $nihala balance (read-only)");
     assert([...methods].every((m) => m === "getTokenAccountsByOwner"), "server only ever called getTokenAccountsByOwner (no transactions): " + [...methods].join(","));
+    const src = await Promise.all(["holders.js", "server.js", "world.js", "public/game.js"].map((f) => import("node:fs/promises").then((fs) => fs.readFile(path.join(ROOT, f), "utf8"))));
+    const joined = src.join("\n");
+    assert(!/sendTransaction|createTransfer|transferChecked|burnChecked/.test(joined), "no token transfer, burn or sendTransaction path in holder/shop code");
     console.log("\nALL NIHALA HOLDER TESTS PASSED (mock RPC)");
   } catch (e) {
     console.error(log.slice(-3000));

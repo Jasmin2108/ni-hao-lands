@@ -13,7 +13,7 @@ const persist = require("./persist");
 
 const world = require("./world");
 const {
-  AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP, QUESTS,
+  AVATARS, SKILLS, ITEMS, SHOP, PREMIUM_SHOP, HOLDER_SHOP, QUESTS,
   SMELT_RECIPES, SMITH_RECIPES,
   MIHAO_MINT, MIHAO_TOKEN_PROGRAM, DEXSCREENER,
   levelFromXp, emptySkills, normalizeQuests, rollFishKg, isWalkable, pathfind, zoneAt, zoneBlocked, adj, buildWorld,
@@ -43,7 +43,10 @@ const NIHALA_RECHECK_MS = Number(process.env.NIHALA_RECHECK_MS) || 8 * 60 * 1000
 const NIHALA_RARE_CHANCE = process.env.NIHALA_RARE_CHANCE != null ? Number(process.env.NIHALA_RARE_CHANCE) : 0.03;
 const NIHALA_DISCLAIMER = "Holder perks are in-game only. Not financial advice. $mihao rewards for holders are planned, not promised.";
 const HOLDER_TOOLS = ["golden_cat_rod", "lucky_jade_axe", "lucky_pickaxe"];
-const nihalaChecker = require("./holders").createHolderChecker({
+const {
+  createHolderChecker, wholeTokenBalance, holdsAtLeast, NIHALA_DECIMALS,
+} = require("./holders");
+const nihalaChecker = createHolderChecker({
   rpc: PUBLIC_RPC, mint: NIHALA_MINT, minBalance: NIHALA_HOLDER_MIN,
   cacheMs: Number(process.env.NIHALA_CACHE_MS) || NIHALA_CACHE_MS,
 });
@@ -816,17 +819,44 @@ function streakReset(s) { s.streak = 0; }
 function isNihalaHolder(s) {
   return !!(s && s.account && s.account.wallet && s.nihala && s.nihala.holder && s.nihala.owner === s.account.wallet);
 }
+function formatHold(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function signedNihalaStatus(s) {
+  return (s && s.account && s.account.wallet && s.nihala && s.nihala.owner === s.account.wallet) ? s.nihala : null;
+}
+function canUseHolderItem(s, def) {
+  if (!def || !def.holderOnly) return true;
+  const st = signedNihalaStatus(s);
+  if (!st) return false;
+  const need = def.holdMin || 0;
+  if (need <= 0) return isNihalaHolder(s);
+  return holdsAtLeast(st, need);
+}
+function shopUnlocked(s, hold) {
+  const st = signedNihalaStatus(s);
+  return !!(st && holdsAtLeast(st, hold));
+}
 function nihalaStatusPayload(s) {
   const st = s.nihala;
   const signedIn = !!s.account.wallet;
+  const mine = signedNihalaStatus(s);
   return {
     signedIn,
     holder: isNihalaHolder(s),
-    balance: st && signedIn ? st.balance : 0,
+    balance: mine ? st.balance : 0,
+    balanceWhole: mine ? wholeTokenBalance(st).toString() : "0",
     checkedAt: st ? st.checkedAt : null,
     checking: !!s.nihalaChecking,
     error: st && st.error ? "Balance check unavailable right now; will retry." : null,
     tools: HOLDER_TOOLS.map((id) => ({ id, name: ITEMS[id].name, owned: ownsItem(s.account, id) })),
+    shop: HOLDER_SHOP.map((o) => ({
+      itemId: o.itemId,
+      name: ITEMS[o.itemId].name,
+      hold: o.hold,
+      owned: ownsItem(s.account, o.itemId),
+      unlocked: shopUnlocked(s, o.hold),
+    })),
   };
 }
 function ownsItem(account, id) {
@@ -848,10 +878,41 @@ async function refreshNihala(s, force = false) {
   }
   if (!sessionsHas(s)) return;
   const now = isNihalaHolder(s);
+  const stripped = enforceHolderEquipment(s);
   if (now && !was) toast(s, "nihala holder perks active: holder badge, holder tools and rare finds.");
   if (!now && was) toast(s, "Your $nihala balance reads 0, so holder perks are paused.");
   send(s.ws, { type: "me", me: mePayload(s) });
-  if (now !== was) broadcastState();
+  if (now !== was || stripped) broadcastState();
+}
+function enforceHolderEquipment(s) {
+  const eq = s.account.equipped || {};
+  let changed = false;
+  for (const [slot, id] of Object.entries(eq)) {
+    const def = ITEMS[id];
+    if (!def || !def.holderOnly || canUseHolderItem(s, def)) continue;
+    delete eq[slot];
+    changed = true;
+    const need = def.holdMin || 0;
+    toast(s, need
+      ? `The ${def.name} is unequipped. Hold ${formatHold(need)} $nihala to use it again.`
+      : `The ${def.name} is unequipped. Holder perks are paused.`);
+  }
+  if (changed) persist.markDirty();
+  return changed;
+}
+function unlockHolderShopItem(s, itemId) {
+  const offer = HOLDER_SHOP.find((o) => o.itemId === itemId);
+  if (!offer) { toast(s, "The holder shop doesn't have that."); return; }
+  const def = ITEMS[itemId];
+  if (!s.account.wallet) { toast(s, "Sign in with a wallet to check $nihala and unlock by holding."); return; }
+  if (!shopUnlocked(s, offer.hold)) {
+    toast(s, `Hold ${formatHold(offer.hold)} $nihala to unlock the ${def.name}. Nothing is spent.`);
+    return;
+  }
+  if (ownsItem(s.account, itemId)) { toast(s, `You already have the ${def.name}.`); return; }
+  if (!gainItem(s, itemId, 1)) { toast(s, "Your inventory is full."); return; }
+  toast(s, `You unlock the ${def.name} by holding ${formatHold(offer.hold)} $nihala. It works while you keep holding enough. Nothing was spent.`);
+  send(s.ws, { type: "me", me: mePayload(s) });
 }
 function sessionsHas(s) { return sessions.get(s.ws) === s; }
 function claimHolderTool(s, itemId) {
@@ -1043,13 +1104,14 @@ function bestTool(account, kind, session) {
   let best = null;
   const skill = kind === "pickaxe" ? "mining" : kind === "axe" ? "woodcutting" : kind === "rod" ? "fishing" : null;
   const lvl = skill ? skillLevelOf(account, skill) : 99;
-  const holderOk = !!(session && isNihalaHolder(session));
   const consider = (id) => {
     const def = ITEMS[id];
     if (!def || def.tool !== kind) return;
     if ((def.toolLevel || 1) > lvl) return;
-    if (def.holderOnly && !holderOk) return;
-    if (!best || (def.toolTier || 0) > (best.toolTier || 0)) best = def;
+    if (def.holderOnly && !canUseHolderItem(session, def)) return;
+    const betterTier = (def.toolTier || 0) > (best && best.toolTier || 0);
+    const betterSpeed = (def.toolTier || 0) === (best && best.toolTier || 0) && (def.toolSpeed || 1) < (best && best.toolSpeed || 1);
+    if (!best || betterTier || betterSpeed) best = def;
   };
   for (const it of account.inventory || []) consider(it.id);
   for (const id of Object.values(account.equipped || {})) consider(id);
@@ -1736,8 +1798,11 @@ function bankOp(s, op, itemId, qty = 1) {
 function equipItem(s, itemId) {
   const def = ITEMS[itemId];
   if (!def || !def.slot) { toast(s, "You can't wear that."); return; }
-  if (def.holderOnly && !isNihalaHolder(s) && s.account.equipped[def.slot] !== itemId) {
-    toast(s, "Holder tools work while your signed-in wallet holds $nihala. Perks are paused.");
+  if (def.holderOnly && !canUseHolderItem(s, def) && s.account.equipped[def.slot] !== itemId) {
+    const need = def.holdMin || 0;
+    toast(s, need
+      ? `Hold ${formatHold(need)} $nihala to use the ${def.name}.`
+      : "Holder tools work while your signed-in wallet holds $nihala. Perks are paused.");
     return;
   }
   if (!s.account.inventory.some((i) => i.id === itemId) && s.account.equipped[def.slot] !== itemId) {
@@ -1812,6 +1877,8 @@ function welcomePayload(s) {
     nihalaChart: NIHALA_DEXSCREENER,
     nihalaDisclaimer: NIHALA_DISCLAIMER,
     holderTools: HOLDER_TOOLS,
+    holderShop: HOLDER_SHOP,
+    nihalaDecimals: NIHALA_DECIMALS,
     dexscreener: DEXSCREENER,
     players: [...sessions.values()].map(publicPlayer),
     t: Date.now(),
@@ -2099,6 +2166,9 @@ function onMessage(ws, raw) {
     case "holderClaim":
       claimHolderTool(s, String(msg.itemId || ""));
       break;
+    case "holderShopUnlock":
+      unlockHolderShopItem(s, String(msg.itemId || ""));
+      break;
     case "premiumBuy":
       toast(s, "Token purchases are not enabled. This is a design stub only.");
       break;
@@ -2336,6 +2406,8 @@ app.get("/api/config", (_req, res) => {
     nihalaChart: NIHALA_DEXSCREENER,
     nihalaDisclaimer: NIHALA_DISCLAIMER,
     nihalaHolderMin: NIHALA_HOLDER_MIN,
+    nihalaDecimals: NIHALA_DECIMALS,
+    holderShop: HOLDER_SHOP,
     dexscreener: DEXSCREENER,
     premiumShop: PREMIUM_SHOP,
     avatars: AVATARS,

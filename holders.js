@@ -96,4 +96,41 @@ function createHolderChecker({ rpc, mint, minBalance = 0, cacheMs = 7 * 60 * 100
   return { check, peek: (owner) => cache.get(owner) || null, clear: () => cache.clear(), mint, minBalance, cacheMs };
 }
 
-module.exports = { createHolderChecker, TOKEN_PROGRAM, TOKEN_2022_PROGRAM };
+// On-chain $nihala mint facts (getTokenSupply, 2026-11-12): 6 decimals, 1,000,000,000 whole-token supply.
+// Shop thresholds are whole-token amounts (e.g. 100,000 $nihala), not raw base units.
+const NIHALA_DECIMALS = 6;
+
+function wholeTokenBalance(status, decimals = NIHALA_DECIMALS) {
+  const dec = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : NIHALA_DECIMALS;
+  const base = 10n ** BigInt(dec);
+  if (status && status.amount != null && String(status.amount) !== "") {
+    try {
+      const raw = BigInt(status.amount);
+      if (raw < 0n) return 0n;
+      return raw / base;
+    } catch (_) { /* fall through to ui balance */ }
+  }
+  const ui = Number(status && status.balance);
+  if (!Number.isFinite(ui) || ui <= 0) return 0n;
+  // Floor to whole tokens; ui is already decimal-adjusted.
+  return BigInt(Math.floor(ui));
+}
+
+function holdsAtLeast(status, wholeTokens, decimals = NIHALA_DECIMALS) {
+  const need = (() => { try { return BigInt(wholeTokens); } catch (_) { return 0n; } })();
+  if (need <= 0n) {
+    if (status && status.holder) return true;
+    return wholeTokenBalance(status, decimals) > 0n;
+  }
+  return wholeTokenBalance(status, decimals) >= need;
+}
+
+function rawAmountFromWhole(wholeTokens, decimals = NIHALA_DECIMALS) {
+  const dec = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : NIHALA_DECIMALS;
+  return (BigInt(wholeTokens) * (10n ** BigInt(dec))).toString();
+}
+
+module.exports = {
+  createHolderChecker, TOKEN_PROGRAM, TOKEN_2022_PROGRAM,
+  NIHALA_DECIMALS, wholeTokenBalance, holdsAtLeast, rawAmountFromWhole,
+};

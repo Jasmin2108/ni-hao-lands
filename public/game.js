@@ -12,6 +12,7 @@
     avatars: [],
     shop: [],
     premiumShop: [],
+    holderShop: [],
     players: [],
     nodes: [],
     mobs: [],
@@ -275,6 +276,7 @@
         state.avatars = msg.avatars || state.avatars;
         state.shop = msg.shop || [];
         state.premiumShop = msg.premiumShop || [];
+        state.holderShop = msg.holderShop || [];
         state.npcs = (msg.world && msg.world.npcs) || [];
         state.players = msg.players || [];
         state.nodes = msg.nodes || [];
@@ -678,16 +680,18 @@
     renderNihala();
   }
 
-  // $nihala holder perks panel. Read-only: no buy, swap or transfer controls exist anywhere.
+  // $nihala holder perks + holder shop. Read-only: no buy, swap or transfer controls exist anywhere.
   function renderNihala() {
     const me = state.me;
     if (!me) return;
-    const st = me.nihalaStatus || { signedIn: !!me.wallet, holder: false, tools: [] };
+    const st = me.nihalaStatus || { signedIn: !!me.wallet, holder: false, tools: [], shop: [] };
     const status = $("nihala-status");
     const tools = $("nihala-tools");
+    const shop = $("nihala-shop");
     tools.innerHTML = "";
+    if (shop) shop.innerHTML = "";
     if (!st.signedIn) {
-      status.textContent = "Sign in with a Solana wallet (login message only) to check for $nihala holder perks.";
+      status.textContent = "Sign in with a Solana wallet (login message only) to check for $nihala holder perks and the holder shop.";
     } else if (st.checking && !st.checkedAt) {
       status.textContent = "Checking your $nihala balance (read-only)…";
     } else if (st.holder) {
@@ -710,6 +714,37 @@
       row.appendChild(btn);
       tools.appendChild(row);
     }
+    if (!shop) return;
+    const catalog = (st.shop && st.shop.length) ? st.shop : (state.holderShop || []).map((o) => ({
+      itemId: o.itemId, name: (state.items[o.itemId] || {}).name || o.itemId, hold: o.hold, owned: false, unlocked: false,
+    }));
+    if (!st.signedIn) {
+      const p = document.createElement("p");
+      p.className = "fine";
+      p.textContent = "Sign in with a Solana wallet to check $nihala. The shop is visible, but items stay locked until you sign in.";
+      shop.appendChild(p);
+    }
+    for (const o of catalog) {
+      const row = document.createElement("div");
+      row.className = "shop-row" + (o.owned || o.unlocked ? "" : " locked");
+      const def = state.items[o.itemId] || {};
+      const need = "Hold " + fmtHold(o.hold) + " $nihala to unlock";
+      row.innerHTML = `<img class="px-icon" src="${G.iconURL("item", o.itemId)}" alt=""><div class="shop-info"><strong>${esc(o.name)}</strong><div class="fine">${esc(def.desc || "")}</div><div class="hold-need">${esc(need)}</div></div>`;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "holder-unlock";
+      if (o.owned) { btn.textContent = "Unlocked"; btn.disabled = true; }
+      else if (!st.signedIn) { btn.textContent = "Sign in to check $nihala"; btn.disabled = true; }
+      else if (o.unlocked) { btn.textContent = "Unlock by holding"; btn.disabled = false; }
+      else { btn.textContent = "Locked"; btn.disabled = true; btn.title = need; }
+      btn.addEventListener("click", () => send({ type: "holderShopUnlock", itemId: o.itemId }));
+      row.appendChild(btn);
+      shop.appendChild(row);
+    }
+  }
+  function fmtHold(n) {
+    n = Math.floor(Number(n) || 0);
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   }
   function fmtAmount(n) {
     n = Number(n) || 0;
@@ -3404,7 +3439,7 @@
     { t: "Walk around", b: () => touchOn() ? "Drag the joystick (bottom left) to walk, or tap the ground where you want to go." : "Walk with WASD or the arrow keys, or click the ground where you want to go.", auto: "move" },
     { t: "Say 你好", b: () => (touchOn() ? "Stand next to something and tap Use, or tap it directly" : "Stand next to something and press E or Space, or click it") + ". Old Maneki, the cat with the gold ! near the square, has your first story chapter.", auto: "npc" },
     { t: "Catch a fish", b: () => "Walk to the Fish Pond (west of the village, see the map) and tap a fishing spot. When the float dips, " + (touchOn() ? "tap Use" : "press E / Space") + " for a bonus. Waiting works too.", auto: "fish" },
-    { t: "Make it yours", b: () => "The Quests tab holds your story Journal, daily tasks, visit streak and this week's village event. The Log tab tracks everything you find. The $nihala tab has optional holder perks; the whole game is free. Have fun!", next: "Let's play", last: true },
+    { t: "Make it yours", b: () => "The Quests tab holds your story Journal, daily tasks, visit streak and this week's village event. The Log tab tracks everything you find. The $nihala tab has optional holder perks and a holder shop (unlock by holding, nothing is spent); the whole game is free. Have fun!", next: "Let's play", last: true },
   ];
   function guideSync() {
     const el = $("guide");

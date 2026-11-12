@@ -5,7 +5,7 @@
 const { ITEMS } = require("./world");
 
 // ---------------- collection log ----------------
-const HOLDER_ONLY = new Set(["raw_lucky_koi", "lucky_cat_gem", "golden_bamboo", "golden_yarn", "golden_cat_rod", "lucky_jade_axe", "lucky_pickaxe"]);
+const HOLDER_ONLY = new Set(["raw_lucky_koi", "lucky_cat_gem", "golden_bamboo", "golden_yarn", "golden_cat_rod", "lucky_jade_axe", "lucky_pickaxe", "harbor_charm_rod", "shrine_charm_axe", "quarry_charm_pickaxe", "lantern_jade_rod", "lantern_jade_axe", "lantern_jade_pickaxe"]);
 const COLLECTION = [
   { id: "fish", name: "Fish", hint: "Pond, harbor and deep piers. Perfect strikes can hook a Moon Koi.",
     items: ["raw_minnow", "raw_fish", "raw_koi", "raw_golden_koi", "raw_moon_koi", "raw_lucky_koi"] },
@@ -22,7 +22,7 @@ const COLLECTION = [
   { id: "forge", name: "Forge", hint: "Smelt at the furnace, smith at the anvil.",
     items: ["copper_bar", "bronze_bar", "iron_bar", "jade_bar", "bronze_sword", "bronze_pickaxe", "bronze_axe", "bronze_rod"] },
   { id: "keepsakes", name: "Keepsakes & special tools", hint: "Quest rewards, monster drops, and holder tools.",
-    items: ["maneki_ribbon", "bamboo_hat", "koi_charm", "shrine_sash", "rat_tail", "bones", "shrine_token", "golden_cat_rod", "lucky_jade_axe", "lucky_pickaxe"] },
+    items: ["maneki_ribbon", "bamboo_hat", "koi_charm", "shrine_sash", "rat_tail", "bones", "shrine_token", "golden_cat_rod", "lucky_jade_axe", "lucky_pickaxe", "harbor_charm_rod", "shrine_charm_axe", "quarry_charm_pickaxe", "lantern_jade_rod", "lantern_jade_axe", "lantern_jade_pickaxe"] },
 ].map((g) => ({ ...g, items: g.items.filter((id) => ITEMS[id]) }));
 const COLLECTIBLE = new Map();
 for (const g of COLLECTION) for (const id of g.items) COLLECTIBLE.set(id, g.id);

@@ -77,9 +77,10 @@ $nihala (lowercase ticker) is live on pump.fun, paired with $mihao. CA `FNkoLTsB
 - Only for players signed in with a wallet (the existing signMessage login). The server reads the SPL balance with `getTokenAccountsByOwner` on a public RPC (mint filter, which covers Token and Token-2022; per-program scan as a fallback). Nothing is ever signed, built or sent.
 - Holder = balance above `NIHALA_HOLDER_MIN` (0). Results are cached ~7 minutes; online players are re-checked on login and every ~8 minutes. Perks pause when the balance reads 0, and resume when it is back.
 - Holders get a **nihala holder** badge by their name (nametag, HUD, chat), free one-time claims of three holder tools (Golden Cat Rod, Lucky Jade Axe, Lucky Pickaxe: iron-tier, a little quicker than iron, can't be sold) and a ~3% chance at rare finds while gathering (Lucky Golden Koi, Lucky Cat Gem, Golden Bamboo, Golden Yarn). The bigger koi is kept off the fish leaderboard so ranks stay fair.
+- A **holder shop** on the $nihala tab unlocks better rods, axes and pickaxes if the signed-in wallet currently holds enough $nihala. Thresholds are whole tokens, starting at 100,000 and stepping up (250k, 500k, 1M, 2.5M, 5M). Nothing is spent: there is no buy button, swap or transfer. Access is live — if the balance drops below a tool's amount, that tool is unequipped and unusable until you hold enough again. Shop tools match or stay under crafted jade speed so they don't quietly outpace public gathering ranks, and they are bonus collection entries that don't count toward 100%.
 - Non-holders see a polite line with the CA and: *Holder perks are in-game only. Not financial advice. $mihao rewards for holders are planned, not promised.*
 - There are no buy buttons, swaps or fund-moving links. The only token link is the plain DexScreener chart.
-- Tests: `npm run test:nihala` (mock RPC: holder, non-holder, balance to 0, guest, Token + Token-2022). `node test-nihala-holder.mjs https://host` checks the non-holder path on a live host with a fresh test wallet.
+- Tests: `npm run test:nihala` (mock RPC: holder, non-holder, balance to 0, guest, Token + Token-2022, shop thresholds / unlock / revoke / spoof). `node test-nihala-holder.mjs https://host` checks the non-holder path on a live host with a fresh test wallet.
 
 ## Smooth movement and network
 

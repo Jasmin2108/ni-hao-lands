@@ -893,10 +893,11 @@
       if (id === "koi_charm") { px(g, 3, 1, 1, 6, "#3a2a1c"); px(g, 12, 1, 1, 6, "#3a2a1c"); px(g, 4, 6, 8, 1, "#3a2a1c"); px(g, 5, 7, 6, 5, "#f08a3a"); px(g, 6, 8, 2, 2, "#fff3c8"); px(g, 9, 9, 2, 2, "#e85a2a"); px(g, 7, 12, 2, 3, "#e85a2a"); px(g, 5, 7, 6, 1, "#ffb070"); return; }
       if (id === "shrine_sash") { px(g, 2, 1, 4, 3, "#f4ead0"); px(g, 4, 4, 4, 3, "#f4ead0"); px(g, 6, 7, 4, 3, "#f4ead0"); px(g, 8, 10, 4, 3, "#f4ead0"); px(g, 2, 1, 1, 3, "#c8322a"); px(g, 11, 10, 1, 3, "#c8322a"); px(g, 9, 12, 5, 3, "#e6b84a"); px(g, 10, 13, 3, 1, "#fff0a8"); return; }
       if (id === "maneki_ribbon") { px(g, 2, 5, 5, 5, "#c8322a"); px(g, 9, 5, 5, 5, "#c8322a"); px(g, 7, 6, 2, 3, "#e6b84a"); px(g, 5, 10, 2, 4, "#c8322a"); px(g, 9, 10, 2, 4, "#c8322a"); return; }
-      const m = id === "lucky_pickaxe" ? METAL.gold : metalOf(id);
-      if (id.endsWith("_pickaxe")) { for (let i = 0; i < 10; i++) px(g, 3 + i, 13 - i, 2, 2, "#8a5a33"); px(g, 4, 2, 9, 2, m[0]); px(g, 3, 3, 2, 3, m[0]); px(g, 12, 3, 2, 3, m[0]); px(g, 5, 2, 6, 1, m[1]); return; }
-      if (id.endsWith("_axe")) { for (let i = 0; i < 10; i++) px(g, 3 + i, 13 - i, 2, 2, "#8a5a33"); px(g, 9, 2, 5, 6, m[0]); px(g, 13, 2, 1, 6, m[1]); px(g, 9, 2, 5, 1, m[1]); return; }
-      if (id.endsWith("_rod")) { for (let i = 0; i < 12; i++) px(g, 2 + i, 14 - i, 1, 1, "#8a5a33"); px(g, 2, 13, 3, 2, m[0]); px(g, 13, 2, 1, 9, "#e8e8e8"); px(g, 12, 11, 3, 2, "#c8322a"); return; }
+      const m = (id === "lucky_pickaxe" || id.includes("charm")) ? METAL.gold : metalOf(id);
+      const holderSparkle = /charm|lantern_jade/.test(id);
+      if (id.endsWith("_pickaxe")) { for (let i = 0; i < 10; i++) px(g, 3 + i, 13 - i, 2, 2, "#8a5a33"); px(g, 4, 2, 9, 2, m[0]); px(g, 3, 3, 2, 3, m[0]); px(g, 12, 3, 2, 3, m[0]); px(g, 5, 2, 6, 1, m[1]); if (holderSparkle) sparkle(); return; }
+      if (id.endsWith("_axe")) { for (let i = 0; i < 10; i++) px(g, 3 + i, 13 - i, 2, 2, "#8a5a33"); px(g, 9, 2, 5, 6, m[0]); px(g, 13, 2, 1, 6, m[1]); px(g, 9, 2, 5, 1, m[1]); if (holderSparkle) sparkle(); return; }
+      if (id.endsWith("_rod")) { for (let i = 0; i < 12; i++) px(g, 2 + i, 14 - i, 1, 1, "#8a5a33"); px(g, 2, 13, 3, 2, m[0]); px(g, 13, 2, 1, 9, "#e8e8e8"); px(g, 12, 11, 3, 2, "#c8322a"); if (holderSparkle) sparkle(); return; }
       if (id.endsWith("_sword")) { for (let i = 0; i < 8; i++) px(g, 6 + i, 9 - i, 2, 2, m[0]); for (let i = 0; i < 8; i++) px(g, 7 + i, 8 - i, 1, 1, m[1]); px(g, 3, 10, 5, 2, "#e6b84a"); px(g, 5, 8, 2, 5, "#e6b84a"); px(g, 2, 12, 3, 2, "#6b4426"); return; }
       if (id.endsWith("_helm")) { px(g, 3, 4, 10, 8, m[0]); px(g, 4, 3, 8, 1, m[0]); px(g, 4, 4, 4, 2, m[1]); px(g, 3, 11, 10, 2, m[2]); px(g, 7, 7, 2, 5, m[2]); return; }
       if (id.endsWith("_mail")) { px(g, 3, 3, 10, 11, m[0]); px(g, 1, 4, 3, 5, m[0]); px(g, 12, 4, 3, 5, m[0]); px(g, 6, 3, 4, 2, m[2]); for (let y = 6; y < 14; y += 2) px(g, 4, y, 8, 1, m[2]); px(g, 4, 4, 2, 9, m[1]); return; }

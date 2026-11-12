@@ -522,7 +522,13 @@ body.touch-on #key-hint { bottom: 140px; }
 @media (hover: none) { .shop-row button, .holder-claim { min-height: 44px; } }
 .chat-badge { font-size: 9px !important; padding: 0 4px !important; vertical-align: 1px; }
 #nihala-status .nihala-badge { margin-right: 4px; }
-#nihala-tools .shop-row { align-items: center; }
+#nihala-tools .shop-row, #nihala-shop .shop-row { align-items: center; }
+.nihala-shop-title { margin: 12px 0 6px; color: #ffe08a; font-size: 14px; }
+#nihala-shop .shop-row.locked { opacity: .78; }
+#nihala-shop .hold-need { color: #ffe08a; font-size: 11px; }
+.holder-unlock { padding: 4px 10px; font-size: 12px; }
+.holder-unlock[disabled] { opacity: .55; cursor: default; }
+@media (hover: none) { .holder-unlock { min-height: 44px; } }
 footer .ca { font-family: ui-monospace, Menlo, Consolas, monospace; }
 .nihala-box button.ca { background: rgba(20,12,6,.65); color: #ffe08a; border: 1px solid rgba(212,160,23,.55); padding: 2px 6px; cursor: copy; max-width: 100%; }
 .nihala-box button.ca:hover { background: rgba(60,36,12,.8); }

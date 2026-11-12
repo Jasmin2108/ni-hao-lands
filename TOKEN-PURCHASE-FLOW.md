@@ -27,9 +27,9 @@ Do not turn this into running purchase code until:
 
 ## What this prototype actually does
 
-- The $nihala tab shows holder perks, the $nihala CA, a plain chart link and the disclaimer. No Buy buttons, no swaps.
-- For wallet-signed-in players the server runs a **read-only** `getTokenAccountsByOwner` check for $nihala (and the client asks for $mihao). Holders get a badge, free holder tools and a small rare-find chance. Those are perks, not purchases.
-- `premiumBuy` on the websocket only returns a toast: purchases are not enabled.
+- The $nihala tab shows holder perks, the holder shop, the $nihala CA, a plain chart link and the disclaimer. No Buy buttons, no swaps.
+- For wallet-signed-in players the server runs a **read-only** `getTokenAccountsByOwner` check for $nihala (and the client asks for $mihao). Holders get a badge, free holder tools and a small rare-find chance. The holder shop unlocks better tools if you currently hold enough $nihala (starting at 100,000); those tools are unequipped if the balance drops. Those are perks, not purchases, and nothing is transferred.
+- `premiumBuy` on the websocket only returns a toast: purchases are not enabled. `holderShopUnlock` never moves funds.
 
 ## Environment (for a future build, not used to move funds now)
 

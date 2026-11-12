@@ -2350,6 +2350,13 @@ app.use((_req, res, next) => {
   );
   next();
 });
+// Domain proof for the Cherry marketplace listing (dotfiles are not served by express.static).
+app.get("/.well-known/cherry-app.json", (_req, res) => {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.sendFile(path.join(__dirname, "public", ".well-known", "cherry-app.json"));
+});
 app.post("/api/avatar", express.json({ limit: "120kb" }), handleAvatarUpload);
 app.use(express.json({ limit: "32kb" }));
 app.use("/assets", express.static(path.join(__dirname, "assets"), { maxAge: "1h" }));

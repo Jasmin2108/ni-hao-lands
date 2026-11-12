@@ -14,7 +14,12 @@ try {
       path + " has Cherry frame-ancestors CSP"
     );
   }
-  console.log("all csp checks passed");
+  const proof = await fetch(base + "/.well-known/cherry-app.json");
+  assert(proof.ok, "cherry-app.json ok");
+  assert((proof.headers.get("content-type") || "").includes("application/json"), "cherry-app.json is JSON");
+  const body = await proof.json();
+  assert(body.appId === "9fac6fde-1424-40ea-98db-680c3d724931", "cherry-app.json names this Cherry app");
+  console.log("all csp and cherry proof checks passed");
 } finally {
   await stop();
 }

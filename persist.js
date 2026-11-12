@@ -289,6 +289,7 @@ function ingestAccount(p) {
     quests: p.quests || (p.stats && p.stats.quests) || null,
     daily: p.daily || (p.stats && p.stats.daily) || null,
     bestStreak: Math.max(0, ((p.stats && p.stats.bestStreak) ?? p.bestStreak) | 0),
+    meta: p.meta || (p.stats && p.stats.meta) || null,
     created: p.created || Date.now(),
   };
   accountsById.set(account.id, account);
@@ -360,6 +361,7 @@ async function loadFromPostgres() {
       quests: row.stats && row.stats.quests,
       daily: row.stats && row.stats.daily,
       bestStreak: row.stats && row.stats.bestStreak,
+      meta: row.stats && row.stats.meta,
       created: Number(row.created) || Date.now(),
     });
   }
@@ -450,7 +452,7 @@ async function saveToPostgres() {
           a.id, a.wallet || null, a.name, a.avatar, a.x, a.y, a.gold, a.hp,
           JSON.stringify(a.skills || {}), JSON.stringify(a.inventory || []),
           JSON.stringify(a.bank || {}), JSON.stringify(a.equipped || {}),
-          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0), periods: a.periods || null, lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0), quests: a.quests || null, daily: a.daily || null, bestStreak: Math.max(0, a.bestStreak | 0) }),
+          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0), periods: a.periods || null, lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0), quests: a.quests || null, daily: a.daily || null, bestStreak: Math.max(0, a.bestStreak | 0), meta: a.meta || null }),
           a.created || Date.now(), Date.now(),
         ]
       );

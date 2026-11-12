@@ -63,6 +63,9 @@ const ITEMS = {
   gold_collar: { id: "gold_collar", name: "Gold Collar", stack: false, cosmetic: true, slot: "neck", desc: "Shiny collar. Cosmetic.", sell: 40 },
   lantern_hat: { id: "lantern_hat", name: "Lantern Hat", stack: false, cosmetic: true, slot: "head", desc: "A paper-lantern hat. Cosmetic.", sell: 50 },
   maneki_ribbon: { id: "maneki_ribbon", name: "Maneki Ribbon", stack: false, cosmetic: true, slot: "neck", desc: "A red ribbon from Old Maneki. Cosmetic.", sell: 0 },
+  bamboo_hat: { id: "bamboo_hat", name: "Bamboo Hat", stack: false, cosmetic: true, slot: "head", desc: "A woven bamboo hat from the Lantern Festival story. Cosmetic.", sell: 0 },
+  koi_charm: { id: "koi_charm", name: "Koi Charm", stack: false, cosmetic: true, slot: "neck", desc: "A little koi charm from Harbor Hao. Cosmetic.", sell: 0 },
+  shrine_sash: { id: "shrine_sash", name: "Shrine Sash", stack: false, cosmetic: true, slot: "neck", desc: "The Shrine Guardian's sash. Cosmetic.", sell: 0 },
 
   bronze_pickaxe: { id: "bronze_pickaxe", name: "Bronze Pickaxe", stack: false, tool: "pickaxe", toolTier: 1, toolLevel: 1, toolSpeed: 1, slot: "pickaxe", desc: "A basic pickaxe. Mines copper and tin.", sell: 15 },
   iron_pickaxe: { id: "iron_pickaxe", name: "Iron Pickaxe", stack: false, tool: "pickaxe", toolTier: 2, toolLevel: 15, toolSpeed: 0.82, slot: "pickaxe", desc: "Mines copper, tin and iron faster.", sell: 40 },
@@ -326,7 +329,8 @@ function adj(x1, y1, x2, y2) {
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2)) <= 1;
 }
 
-function pathfind(tiles, x0, y0, x1, y1, maxSteps = 1200) {
+// passable(x, y) optionally excludes extra tiles (e.g. zones the player hasn't unlocked) so routes go around them.
+function pathfind(tiles, x0, y0, x1, y1, maxSteps = 1200, passable = null) {
   x0 = Math.round(x0); y0 = Math.round(y0);
   x1 = Math.round(x1); y1 = Math.round(y1);
   if (!inBounds(x1, y1, tiles)) return [];
@@ -379,6 +383,7 @@ function pathfind(tiles, x0, y0, x1, y1, maxSteps = 1200) {
     for (const [dx, dy] of dirs) {
       const nx = cur.x + dx, ny = cur.y + dy;
       if (!isWalkable(tiles, nx, ny)) continue;
+      if (passable && !passable(nx, ny)) continue;
       if (dx !== 0 && dy !== 0) {
         if (!isWalkable(tiles, cur.x + dx, cur.y) || !isWalkable(tiles, cur.x, cur.y + dy)) continue;
       }

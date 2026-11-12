@@ -889,6 +889,9 @@
       if (id === "red_scarf") { px(g, 2, 4, 12, 4, "#c8322a"); px(g, 9, 8, 4, 6, "#c8322a"); px(g, 2, 4, 12, 1, "#e85a4a"); px(g, 9, 13, 4, 1, "#e6b84a"); return; }
       if (id === "gold_collar") { g.strokeStyle = "#e6b84a"; px(g, 3, 5, 10, 2, "#e6b84a"); px(g, 2, 7, 2, 3, "#e6b84a"); px(g, 12, 7, 2, 3, "#e6b84a"); px(g, 4, 10, 8, 2, "#e6b84a"); px(g, 7, 11, 2, 3, "#fff0a8"); return; }
       if (id === "lantern_hat") { px(g, 4, 4, 8, 9, "#c8322a"); px(g, 5, 4, 2, 9, "#e85a4a"); px(g, 3, 3, 10, 1, "#e6b84a"); px(g, 3, 13, 10, 1, "#e6b84a"); px(g, 7, 1, 2, 2, "#e6b84a"); return; }
+      if (id === "bamboo_hat") { px(g, 1, 10, 14, 2, "#a8843a"); px(g, 2, 8, 12, 2, "#e0c070"); px(g, 4, 6, 8, 2, "#d0b060"); px(g, 6, 4, 4, 2, "#c8a050"); px(g, 7, 2, 2, 2, "#e0c070"); px(g, 3, 9, 10, 1, "#c8322a"); px(g, 2, 12, 12, 1, "#6a4a1a"); return; }
+      if (id === "koi_charm") { px(g, 3, 1, 1, 6, "#3a2a1c"); px(g, 12, 1, 1, 6, "#3a2a1c"); px(g, 4, 6, 8, 1, "#3a2a1c"); px(g, 5, 7, 6, 5, "#f08a3a"); px(g, 6, 8, 2, 2, "#fff3c8"); px(g, 9, 9, 2, 2, "#e85a2a"); px(g, 7, 12, 2, 3, "#e85a2a"); px(g, 5, 7, 6, 1, "#ffb070"); return; }
+      if (id === "shrine_sash") { px(g, 2, 1, 4, 3, "#f4ead0"); px(g, 4, 4, 4, 3, "#f4ead0"); px(g, 6, 7, 4, 3, "#f4ead0"); px(g, 8, 10, 4, 3, "#f4ead0"); px(g, 2, 1, 1, 3, "#c8322a"); px(g, 11, 10, 1, 3, "#c8322a"); px(g, 9, 12, 5, 3, "#e6b84a"); px(g, 10, 13, 3, 1, "#fff0a8"); return; }
       if (id === "maneki_ribbon") { px(g, 2, 5, 5, 5, "#c8322a"); px(g, 9, 5, 5, 5, "#c8322a"); px(g, 7, 6, 2, 3, "#e6b84a"); px(g, 5, 10, 2, 4, "#c8322a"); px(g, 9, 10, 2, 4, "#c8322a"); return; }
       const m = id === "lucky_pickaxe" ? METAL.gold : metalOf(id);
       if (id.endsWith("_pickaxe")) { for (let i = 0; i < 10; i++) px(g, 3 + i, 13 - i, 2, 2, "#8a5a33"); px(g, 4, 2, 9, 2, m[0]); px(g, 3, 3, 2, 3, m[0]); px(g, 12, 3, 2, 3, m[0]); px(g, 5, 2, 6, 1, m[1]); return; }

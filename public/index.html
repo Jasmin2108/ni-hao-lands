@@ -3,11 +3,43 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Ni Hao Lands — free unofficial $mihao fan MMO</title>
+  <meta name="description" content="Ni Hao Lands is a free, unofficial pixel-art browser MMO for the $mihao community. Fish, mine, cook and follow the Lantern Festival story with friends. Not financial advice." />
+  <meta name="theme-color" content="#5a2a1c" />
   <link rel="icon" type="image/png" href="/favicon.png" />
-  <title>Ni Hao Lands — unofficial fan MMO</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Ni Hao Lands" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="canonical" href="https://ni-hao-lands.onrender.com/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Ni Hao Lands" />
+  <meta property="og:title" content="Ni Hao Lands" />
+  <meta property="og:description" content="A free, unofficial $mihao fan browser MMO. Fish, mine, cook and light the Lantern Festival with friends. No purchases, not financial advice." />
+  <meta property="og:url" content="https://ni-hao-lands.onrender.com/" />
+  <meta property="og:image" content="https://ni-hao-lands.onrender.com/og.png" />
+  <meta property="og:image:secure_url" content="https://ni-hao-lands.onrender.com/og.png" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Ni Hao Lands: pixel-art cats fishing, mining and exploring a lantern-lit village" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Ni Hao Lands" />
+  <meta name="twitter:description" content="A free, unofficial $mihao fan browser MMO. Fish, mine, cook and light the Lantern Festival with friends. Not financial advice." />
+  <meta name="twitter:image" content="https://ni-hao-lands.onrender.com/og.png" />
+  <meta name="twitter:image:alt" content="Ni Hao Lands: pixel-art cats fishing, mining and exploring a lantern-lit village" />
+  <style>
+    /* first paint before styles.css arrives: warm background, readable title, no unstyled flash */
+    html, body { margin: 0; background: #1a110a; color: #f4e6c4; font-family: "Trebuchet MS", system-ui, sans-serif; }
+    body:not(.css-ready) #login > *, body:not(.css-ready) #game { visibility: hidden; }
+    body:not(.css-ready)::before { content: "Ni Hao Lands"; position: fixed; inset: 0; display: grid; place-items: center; font: 800 28px "Trebuchet MS", sans-serif; color: #ffd36a; letter-spacing: .04em; text-shadow: 0 3px 0 #6b1d14; }
+  </style>
+  <link rel="stylesheet" href="/styles.css" onload="document.body && document.body.classList.add('css-ready')" />
 </head>
 <body>
+  <script>if (document.styleSheets.length > 1) document.body.classList.add("css-ready"); setTimeout(function () { document.body.classList.add("css-ready"); }, 2500);</script>
   <div id="login" class="screen">
     <div class="login-card">
       <p class="eyebrow">你好，朋友 · unofficial fan world</p>
@@ -62,6 +94,12 @@
       </div>
       <div id="action-label" hidden></div>
       <div id="zone-banner" hidden></div>
+      <div id="guide" hidden role="dialog" aria-live="polite" aria-label="First-visit guide">
+        <div class="guide-head"><span id="guide-step" class="eyebrow">Tip 1 of 5</span><span id="guide-dots" aria-hidden="true"></span></div>
+        <h3 id="guide-title"></h3>
+        <p id="guide-body"></p>
+        <div class="guide-actions"><button type="button" id="guide-skip">Skip guide</button><button type="button" id="guide-next">Next tip</button></div>
+      </div>
       <div id="levelup-fanfare" hidden>
         <div class="fanfare-card">
           <p class="eyebrow">Level up</p>
@@ -81,6 +119,11 @@
         <label class="vol-row"><span>Effects</span><input type="range" id="vol-sfx" min="0" max="100" step="1" value="70"><output id="vol-sfx-v">70%</output></label>
         <button type="button" id="sound-mute">Mute all</button>
         <p class="fine">All sounds are synthesized in your browser. M toggles mute.</p>
+        <p class="eyebrow pop-sep">Game</p>
+        <div class="pop-btns">
+          <button type="button" id="guide-replay">Show guide</button>
+          <button type="button" id="share-link" title="Copies the game link. Nothing is posted anywhere.">Copy game link</button>
+        </div>
       </div>
       <div id="streak" hidden></div>
       <div id="heat-bar" hidden>
@@ -117,15 +160,19 @@
         <button data-tab="premium">$nihala</button>
         <button data-tab="ranks">Ranks</button>
         <button data-tab="quests">Quests</button>
+        <button data-tab="log">Log</button>
       </div>
       <div id="tab-skills" class="tab on"></div>
       <div id="tab-inv" class="tab"></div>
       <div id="tab-shop" class="tab"></div>
       <div id="tab-bank" class="tab"></div>
       <div id="tab-quests" class="tab">
+        <div id="story-box" class="journal-box"></div>
+        <div id="return-box" class="journal-box"></div>
         <div id="daily-list" class="daily-box"></div>
         <div id="quests-list"></div>
       </div>
+      <div id="tab-log" class="tab"></div>
       <div id="tab-ranks" class="tab">
         <div class="ranks-periods" role="tablist" aria-label="Leaderboard period">
           <button type="button" data-period="week">Weekly</button>

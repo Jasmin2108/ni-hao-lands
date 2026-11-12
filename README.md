@@ -132,6 +132,17 @@ All audio is synthesized in the browser with Web Audio (`public/audio.js`, about
 - Mobs: speed 2.4 tiles/s, slower than walking at 4.2. They leash 9 tiles from home and give up beyond 7 tiles or after a 16-tile chase. When a player dies, every mob on them lets go and walks home. They ignore that player for 45 s, unless the player attacks first. Respawn is at a safe spot away from mobs.
 - Tests: `npm run test:aggro`, `npm run test:minigames`, `npm run test:audio` (Playwright), and `npm run test:playthrough -- https://host both` (desktop + phone end-to-end, safe on live). Server test hooks exist only with `NHL_TEST_HOOKS=1`.
 
+## Long-term play: story, collection log, streaks, weekly events
+
+- **First-visit guide**: 5 short, skippable tips (welcome and disclaimer, move, talk to Old Maneki, catch a fish, where the Journal, Log and $nihala tab are). It shows once per character (stored on the server), auto-advances as you do each step, and doesn't block anything. Veterans skip it. Replay it from the settings button (**Show guide**).
+- **Lantern Festival story**: 7 chapters across village, pond, woods, mine/quarry, harbor, shrine plains and the inner shrine. Chapters open one after another and are handed in by talking to an NPC (gold `!` above them). Progress is counted on the server from real play (fish, ore, logs, yarn, cooking, smelting, smithing, kills, timing taps, zone visits). Rewards: gold, xp, three cosmetics (Bamboo Hat, Koi Charm, Shrine Sash) and titles shown above your name (pick one in the Journal). The hardest step is Combat level 10 for the last chapter. Nothing needs $nihala. The two classic quests still work alongside.
+- **Collection log** (Log tab): fish, treasures, ores and gems, woods and nests, yarn colours, kitchen, forge, keepsakes and special tools. Undiscovered entries show as silhouettes; counts, % and milestone rewards (25/50/75/100%, title "Collector" at 100%). Holder-only finds are a bonus and don't count toward 100%. First finds pop an achievement toast.
+- **Daily visit streak**: one small gold bonus per UTC day (10 gold, +5 per day up to 40, a River Pearl every 7th day). Skipping one day keeps the streak; a longer break just starts again at 1.
+- **Weekly village event**: rotates every Monday 00:00 Helsinki: Pond Fishing Contest, Ore Rush, Village Cook-off, Bamboo Harvest. Personal reward tiers at 10/30/60 points (gold, xp, title "Festival Star") and a top-10 list (`GET /api/event`). In-game rewards only.
+- **Share + install**: Open Graph / X card tags with `/og.png` (1200×630; `/og-1200x675.png` too), a web manifest with icons (add to home screen), and **Copy game link** in settings. It only copies the link; nothing is posted. `python3 tools/make-og.py BANNER.jpg tools/og-still.png --q` rebuilds the share images.
+- All of this lives in `progress.js` (rules) and is stored in each account's `meta` (inside the existing `stats` JSON, so no database migration).
+- Tests: `npm run test:progress` (guide flag, collection, story rewards, streak with grace, weekly event, titles, reconnect, OG/manifest) and `python3 test-guide.py http://localhost:3000` (browser: guide on desktop + phones, Log/Journal panels, no overlap with phone controls; needs `NHL_TEST_HOOKS=1`).
+
 ## Disclaimer
 
 Unofficial fan game. Not affiliated with the $mihao team, @iamnihaocat, mihao.fun, or the real cat's owner. Not financial advice. Community art is used without a formal license in this prototype — ask before a public or paid launch.

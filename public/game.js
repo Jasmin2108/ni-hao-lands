@@ -298,6 +298,7 @@
         state.quests = msg.quests || [];
         state.smeltRecipes = msg.smeltRecipes || [];
         state.smithRecipes = msg.smithRecipes || [];
+        welcomeProgress(msg);
         maybeNamePrompt();
         applyMobileChrome();
         applyTouchControls();
@@ -334,6 +335,7 @@
         rememberName(state.me && state.me.name);
         refreshHud();
         refreshTabs();
+        guideSync();
         break;
       }
       case "fx":
@@ -365,7 +367,7 @@
         break;
       case "examine":
         showExamine(msg.text);
-        if (performance.now() - (state.npcTalkAt || 0) < 6000) sfx("meow");
+        if (performance.now() - (state.npcTalkAt || 0) < 6000) { sfx("meow"); PG.npcMetAt = performance.now(); }
         break;
       case "open":
         openTab(msg.panel);
@@ -618,6 +620,8 @@
     }
 
     renderDaily(me);
+    renderJournal();
+    if (state.tab === "log") renderLog();
     const qlist = $("quests-list");
     if (qlist) {
       const defs = state.quests || [];
@@ -1687,6 +1691,8 @@
     if (eq.neck === "gold_collar") P(-3, -11, 6, 1, "#e6b84a");
     if (eq.neck === "lucky_bell") { P(-3, -11, 6, 1, "#c8322a"); P(-1, -10, 2, 2, "#e6b84a"); }
     if (eq.neck === "maneki_ribbon") { P(-3, -11, 6, 1, "#c8322a"); P(-2, -10, 1.5, 2, "#c8322a"); P(0.5, -10, 1.5, 2, "#c8322a"); }
+    if (eq.neck === "koi_charm") { P(-3, -11, 6, 1, "#3a2a1c"); P(-1.5, -10, 3, 2.5, "#f08a3a"); P(-0.5, -10, 1, 1, "#fff3c8"); P(-1, -7.5, 2, 1, "#e85a2a"); }
+    if (eq.neck === "shrine_sash") { P(-4, -11, 2, 2, "#f4ead0"); P(-2, -9, 2, 2, "#f4ead0"); P(0, -7, 2, 2, "#f4ead0"); P(2, -5, 2, 2, "#f4ead0"); P(-3.5, -10.2, 1, 1, "#c8322a"); P(0.5, -6.2, 1, 1, "#c8322a"); P(2.5, -4, 2, 2, "#e6b84a"); }
     // head token
     const R = 7.5;
     const hcx = fxp + (side ? dir * 0.8 : 0) * k, hcy = fyp + (-17.5 - bob) * k;
@@ -1714,6 +1720,15 @@
       c.beginPath(); c.arc(hcx, hcy - 1 * k, (R + 0.6) * k, Math.PI * 1.05, Math.PI * 1.95); c.lineTo(hcx, hcy - 1 * k); c.fill();
       c.fillStyle = helm[1]; c.fillRect(Math.round(hcx - 4 * k), Math.round(hcy - (R + 0.2) * k), Math.round(3 * k), Math.round(1 * k));
       c.fillStyle = helm[2]; c.fillRect(Math.round(hcx - (R + 0.6) * k), Math.round(hcy - 2 * k), Math.round((2 * R + 1.2) * k), Math.round(1.2 * k));
+    }
+    if (eq.head === "bamboo_hat") {
+      const hy = hcy - (R - 1.5) * k;
+      c.fillStyle = "#a8843a"; c.fillRect(Math.round(hcx - (R + 3.5) * k), Math.round(hy), Math.round((2 * R + 7) * k), Math.round(1.6 * k));
+      c.fillStyle = "#e0c070"; c.fillRect(Math.round(hcx - (R + 2.5) * k), Math.round(hy - 1.4 * k), Math.round((2 * R + 5) * k), Math.round(1.6 * k));
+      c.fillRect(Math.round(hcx - 6 * k), Math.round(hy - 3 * k), Math.round(12 * k), Math.round(1.8 * k));
+      c.fillStyle = "#c8a050"; c.fillRect(Math.round(hcx - 3.5 * k), Math.round(hy - 4.6 * k), Math.round(7 * k), Math.round(1.8 * k));
+      c.fillStyle = "#e0c070"; c.fillRect(Math.round(hcx - 1.2 * k), Math.round(hy - 6 * k), Math.round(2.4 * k), Math.round(1.6 * k));
+      c.fillStyle = "#c8322a"; c.fillRect(Math.round(hcx - 6 * k), Math.round(hy - 1.3 * k), Math.round(12 * k), Math.round(0.9 * k));
     }
     if (eq.head === "lantern_hat") {
       const lx = hcx - 2.5 * k, ly = hcy - (R + 6) * k;
@@ -1839,6 +1854,8 @@
 
   function questMarkFor(npc) {
     const me = state.me;
+    const sm = storyMarkFor(npc);
+    if (sm) return sm;
     if (!me || !state.quests) return null;
     const q = state.quests.find((qq) => qq.giver === npc.id);
     if (!q) return null;
@@ -2155,6 +2172,7 @@
       const o = charOpts(p.id);
       o.name = p.name; o.avatar = self ? (state.me.avatar || p.avatar) : p.avatar; o.self = self;
       o.holder = p.holder; o.nihala = p.nihala; o.action = p.action; o.combatLevel = p.combatLevel;
+      o.title = self ? ((state.me.progress && state.me.progress.title) || "") : (p.title || "");
       o.equipped = self ? (state.me.equipped || p.equipped) : p.equipped;
       o.facing = self ? (manualFacing || (moving ? r.facing : p.facing) || r.facing) : (moving ? r.facing : (p.facing || r.facing));
       if (self) lightAdd(r.x + 0.5, r.y + 0.4, 3.6, 0.85, 0);
@@ -2165,6 +2183,7 @@
       const o = charOpts("__me");
       o.name = state.me.name; o.avatar = state.me.avatar; o.self = true; o.holder = state.me.holder; o.nihala = state.me.nihala;
       o.action = state.me.action; o.equipped = state.me.equipped; o.facing = manualFacing || meR.facing; o.combatLevel = state.me.combatLevel;
+      o.title = (state.me.progress && state.me.progress.title) || "";
       dlAdd(meR.y + 0.6, K_PLAYER, o, 0, 0, meR);
     }
     if (now - (fx.gcAt || 0) > 5000) { // occasional cleanup of entities that left
@@ -2333,10 +2352,12 @@
         c.fillStyle = "#3a1a08"; c.fillText(label, bx + 4, by + 9);
         c.font = "bold 11px \"Trebuchet MS\", sans-serif";
         c.textAlign = "center";
+        drawTagTitle(c, tag, y);
         continue;
       }
       c.strokeText(tag.name, Math.round(tag.sx), Math.round(y));
       c.fillText(tag.name, Math.round(tag.sx), Math.round(y));
+      drawTagTitle(c, tag, y);
     }
   }
 
@@ -3257,6 +3278,8 @@
     } else if (m.kind === "death") {
       sfx("death");
       MGC.ch = null; MGC.streak = 0; hideHeat();
+    } else if (m.kind === "achv") {
+      showAchv(m);
     } else if (m.kind === "task") {
       sfx("quest");
       burst(state.me.x, state.me.y - 0.8, ["#ffe066", "#ff8ab8", "#9cf07a", "#7fd0ff"], 26, 1.8);
@@ -3347,6 +3370,254 @@
     }, true);
   })();
 
+
+  // ================= progression UI: first-visit guide, journal, collection log, achievements, share =================
+  const PG = { npcMetAt: 0, gStep: 0, gDone: true, gInit: false, from: null, metFrom: 0, logKey: "", jKey: "", ev: null, evAt: 0, evTimer: null };
+  const STORY_PLACES = ["Ni Hao Village", "Fish Pond", "Woods & Bamboo Grove", "Mine & Quarry", "Lantern Harbor", "Shrine Plains", "Inner Shrine"];
+  const FISH_IDS = ["raw_minnow", "raw_fish", "raw_koi", "raw_golden_koi", "raw_moon_koi", "raw_lucky_koi"];
+  function prog() { return (state.me && state.me.progress) || null; }
+  function touchOn() { return document.body.classList.contains("touch-on"); }
+  function welcomeProgress(msg) {
+    state.story = msg.story || [];
+    state.collection = msg.collection || [];
+    state.collMilestones = msg.collMilestones || [];
+    state.eventTiers = msg.eventTiers || [];
+    PG.logKey = ""; PG.jKey = "";
+    const p = prog();
+    PG.gInit = true;
+    PG.gDone = !p || !!p.guide.done;
+    PG.gStep = p ? Math.min(GUIDE.length - 1, p.guide.step | 0) : 0;
+    refreshTabs();
+    setTimeout(guideSync, 600);
+  }
+  function rewardText(r) {
+    const bits = [];
+    if (r.gold) bits.push(r.gold + " gold");
+    for (const [k2, v] of Object.entries(r.xp || {})) bits.push(v + " " + k2 + " xp");
+    if (r.item) bits.push(itemName(r.item));
+    if (r.title) bits.push("title “" + r.title + "”");
+    return bits.join(" · ");
+  }
+  // --- first-visit guide (5 short tips, skippable, stored per character on the server)
+  const GUIDE = [
+    { t: "Ni hao, friend!", b: () => "Welcome to Ni Hao Lands: a free, unofficial fan game for the $mihao community. Nothing here costs money and nothing here is financial advice. Five quick tips?", next: "Show me" },
+    { t: "Walk around", b: () => touchOn() ? "Drag the joystick (bottom left) to walk, or tap the ground where you want to go." : "Walk with WASD or the arrow keys, or click the ground where you want to go.", auto: "move" },
+    { t: "Say 你好", b: () => (touchOn() ? "Stand next to something and tap Use, or tap it directly" : "Stand next to something and press E or Space, or click it") + ". Old Maneki, the cat with the gold ! near the square, has your first story chapter.", auto: "npc" },
+    { t: "Catch a fish", b: () => "Walk to the Fish Pond (west of the village, see the map) and tap a fishing spot. When the float dips, " + (touchOn() ? "tap Use" : "press E / Space") + " for a bonus. Waiting works too.", auto: "fish" },
+    { t: "Make it yours", b: () => "The Quests tab holds your story Journal, daily tasks, visit streak and this week's village event. The Log tab tracks everything you find. The $nihala tab has optional holder perks; the whole game is free. Have fun!", next: "Let's play", last: true },
+  ];
+  function guideSync() {
+    const el = $("guide");
+    if (!el || !PG.gInit || !state.me) return;
+    if (PG.gDone) { if (!el.hidden) hideGuide(); return; }
+    if (el.hidden || +el.dataset.step !== PG.gStep) renderGuide(PG.gStep);
+  }
+  function hideGuide() {
+    const el = $("guide");
+    el.hidden = true;
+    document.body.classList.remove("guide-on");
+  }
+  function renderGuide(i) {
+    const el = $("guide"), g = GUIDE[i];
+    if (!el || !g) return;
+    PG.gStep = i;
+    el.dataset.step = String(i);
+    $("guide-step").textContent = `Tip ${i + 1} of ${GUIDE.length}`;
+    $("guide-title").textContent = g.t;
+    $("guide-body").textContent = g.b();
+    $("guide-next").textContent = g.next || "Next tip";
+    $("guide-skip").textContent = g.last ? "Close" : "Skip guide";
+    $("guide-dots").innerHTML = GUIDE.map((_, j) => `<i class="${j === i ? "on" : j < i ? "done" : ""}"></i>`).join("");
+    el.hidden = false;
+    document.body.classList.add("guide-on");
+    const mr = fx.meR || state.me;
+    PG.from = mr ? { x: mr.x, y: mr.y } : null;
+    PG.metFrom = PG.npcMetAt;
+    requestAnimationFrame(() => { const st = el.offsetParent; if (st) st.style.setProperty("--guide-h", el.offsetHeight + "px"); });
+  }
+  function guideAdvance() {
+    if (PG.gDone) return;
+    if (PG.gStep >= GUIDE.length - 1) return guideFinish();
+    PG.gStep += 1;
+    send({ type: "guide", op: "step", step: PG.gStep });
+    renderGuide(PG.gStep);
+    sfx("pop");
+  }
+  function guideFinish(skipped) {
+    PG.gDone = true;
+    send({ type: "guide", op: "done" });
+    hideGuide();
+    if (skipped) toast("Guide hidden. Replay it any time from the settings button.");
+  }
+  function guideReplay() {
+    PG.gDone = false; PG.gStep = 0;
+    send({ type: "guide", op: "reset" });
+    renderGuide(0);
+  }
+  function guideTick() {
+    if (PG.gDone || !state.me) return;
+    const el = $("guide");
+    if (!el || el.hidden) return;
+    const g = GUIDE[PG.gStep];
+    const mr = fx.meR || state.me;
+    if (!g || !g.auto) return;
+    if (g.auto === "move" && PG.from && Math.hypot(mr.x - PG.from.x, mr.y - PG.from.y) >= 3) guideAdvance();
+    else if (g.auto === "npc" && PG.npcMetAt > PG.metFrom) guideAdvance();
+    else if (g.auto === "fish") { const p = prog(); if (p && FISH_IDS.some((id) => (p.coll[id] || 0) > 0)) guideAdvance(); }
+  }
+  setInterval(guideTick, 400);
+  (() => {
+    const nx = $("guide-next"), sk = $("guide-skip");
+    if (nx) nx.addEventListener("click", (e) => { e.stopPropagation(); guideAdvance(); });
+    if (sk) sk.addEventListener("click", (e) => { e.stopPropagation(); if (PG.gStep >= GUIDE.length - 1) guideFinish(); else guideFinish(true); });
+    const gd = $("guide");
+    if (gd) ["pointerdown", "touchstart", "mousedown"].forEach((ev) => gd.addEventListener(ev, (e) => e.stopPropagation(), { passive: true }));
+  })();
+  // --- achievement toasts (feed the collection log, story, streak, event)
+  function showAchv(m) {
+    const box = $("toasts");
+    if (!box) return;
+    const d = document.createElement("div");
+    d.className = "achv";
+    d.innerHTML = `<span class="achv-ico" aria-hidden="true"></span><span class="achv-txt"><strong>${esc(m.title || "")}</strong>${m.sub ? `<small>${esc(m.sub)}</small>` : ""}</span>`;
+    box.appendChild(d);
+    const all = box.querySelectorAll(".achv");
+    if (all.length > 3) all[0].remove();
+    setTimeout(() => d.classList.add("out"), 3800);
+    setTimeout(() => d.remove(), 4200);
+    sfx(/Chapter|Collection \d|points/.test(m.title || "") ? "quest" : "sparkle");
+    if (state.me) burst(state.me.x, state.me.y - 0.8, ["#ffe066", "#fff6c0", "#ff8ab8"], 14, 1.2);
+  }
+  // --- story quest markers on NPCs
+  function storyMarkFor(npc) {
+    const p = prog();
+    if (!p || !state.story || p.story.ch >= state.story.length) return null;
+    const defs = state.story[p.story.ch].objectives, live = p.story.objectives || [];
+    for (let i = 0; i < defs.length; i++) {
+      const d = defs[i];
+      if (d.type !== "talk" || d.npc !== npc.id) continue;
+      if (d.final) return live.filter((o) => !o.final).every((o) => o.done) ? "!" : null;
+      if (!(live[i] && live[i].done)) return "!";
+    }
+    return null;
+  }
+  // --- nameplate titles
+  function drawTagTitle(c, tag, y) {
+    const f = tag.flags;
+    const t = f && f.title;
+    if (!t || f.npc || f.mob) return;
+    c.save();
+    c.font = "bold 9px \"Trebuchet MS\", sans-serif";
+    c.textAlign = "center";
+    c.lineWidth = 3;
+    c.strokeStyle = "rgba(24,14,8,.85)";
+    c.fillStyle = "#f0c96a";
+    const s2 = "« " + t + " »";
+    c.strokeText(s2, Math.round(tag.sx), Math.round(y - 11));
+    c.fillText(s2, Math.round(tag.sx), Math.round(y - 11));
+    c.restore();
+  }
+  // --- journal (story chapters, visit streak, weekly event, titles)
+  function renderJournal() {
+    const p = prog();
+    const sb = $("story-box"), rb = $("return-box");
+    if (!p || !sb || !rb) return;
+    const key = JSON.stringify([p.story, p.login, p.event, p.titles, p.title, (state.story || []).length, PG.evAt]);
+    if (key === PG.jKey) return;
+    PG.jKey = key;
+    const story = state.story || [];
+    const ch = p.story.ch;
+    let h = `<h3 class="jr-h">Lantern Festival <span class="fine">${Math.min(ch, story.length)}/${story.length} chapters</span></h3>`;
+    if (ch < story.length) {
+      const c = story[ch];
+      const objs = p.story.objectives || [];
+      h += `<div class="chapter"><p class="eyebrow">Chapter ${c.n} · ${esc(STORY_PLACES[ch] || c.zone || "")}</p><h4>${esc(c.name)}</h4><p class="fine">${esc(c.intro)}</p><ul class="objs">` +
+        objs.map((o) => `<li class="${o.done ? "done" : ""}${o.final ? " final" : ""}"><span>${o.done ? "✔" : o.final ? "➜" : "○"} ${esc(o.label)}</span>${o.goal > 1 ? `<span class="fine">${Math.min(o.prog, o.goal)}/${o.goal}</span>` : ""}</li>`).join("") +
+        `</ul><p class="fine reward">Reward: ${esc(rewardText(c.reward))}</p></div>`;
+      if (story[ch + 1]) h += `<p class="fine ch-next">Next up: Chapter ${story[ch + 1].n} · ${esc(story[ch + 1].name)}</p>`;
+    } else {
+      h += `<div class="chapter all-done"><h4>The festival is lit!</h4><p class="fine">Every chapter is finished. Thank you, friend.</p></div>`;
+    }
+    if (ch > 0) h += `<p class="fine ch-done">Finished: ${story.slice(0, ch).map((c) => "✔ " + esc(c.name)).join(" · ")}</p>`;
+    if (p.titles && p.titles.length) h += `<label class="title-pick">Title shown above your name <select id="title-pick"><option value="">(none)</option>${p.titles.map((t) => `<option value="${esc(t)}"${t === p.title ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></label>`;
+    sb.innerHTML = h;
+    const sel = $("title-pick");
+    if (sel) sel.addEventListener("change", () => send({ type: "setTitle", title: sel.value }));
+    const L = p.login, E = p.event, tiers = state.eventTiers || [];
+    const top = tiers.length ? tiers[tiers.length - 1].pts : 1;
+    const nextTier = tiers.find((t) => E.score < t.pts);
+    rb.innerHTML = `<div class="streak-card"><div class="streak-num" aria-hidden="true">${L.streak | 0}</div><div><strong>Day ${L.streak | 0} visit streak</strong><p class="fine">Next visit: +${L.next.gold} gold${L.next.item ? " and a River Pearl" : ""}. A skipped day won't break it. Best: ${L.best | 0} day${(L.best | 0) === 1 ? "" : "s"}.</p></div></div>
+      <div class="event-card"><p class="eyebrow">This week in the village</p><h4>${esc(E.name)}</h4><p class="fine">${esc(E.desc)}</p>
+      <div class="row"><span>Your points: <b>${E.score | 0}</b></span><span class="fine">${nextTier ? "next reward at " + nextTier.pts : "all rewards earned!"}</span></div>
+      <div class="bar"><i style="width:${Math.min(100, ((E.score | 0) / top) * 100)}%"></i></div>
+      <div class="tiers">${tiers.map((t, i) => `<span class="${(E.claimed || []).includes(i) ? "on" : ""}">${t.pts} pts · ${t.gold}g${t.title ? " · " + esc(t.title) : ""}</span>`).join("")}</div>
+      <div class="event-top">${eventTopHtml()}</div><p class="fine">New event every Monday 00:00 Helsinki time. Rewards are in-game only.</p></div>`;
+  }
+  function eventTopHtml() {
+    const ev = PG.ev;
+    if (!ev) return `<p class="fine">Loading this week's top players…</p>`;
+    if (!ev.top.length) return `<p class="fine">No points yet this week. Be the first!</p>`;
+    const meName = state.me && state.me.name;
+    return `<ol class="ev-list">${ev.top.map((r) => `<li class="${r.name === meName ? "me" : ""}"><span>${r.rank}. ${esc(r.name)}</span><b>${r.score}</b></li>`).join("")}</ol>` + (ev.you && ev.you.rank > ev.top.length ? `<p class="fine">You: #${ev.you.rank} (${ev.you.score})</p>` : "");
+  }
+  async function loadEventBoard() {
+    try {
+      const tok = localStorage.getItem("nhl-token") || "";
+      const r = await fetch("/api/event" + (tok ? "?viewer=" + encodeURIComponent(tok) : ""), { cache: "no-store" });
+      if (!r.ok) return;
+      PG.ev = await r.json();
+      PG.evAt = Date.now();
+      renderJournal();
+    } catch {}
+  }
+  // --- collection log
+  function renderLog() {
+    const box = $("tab-log"), p = prog();
+    if (!box || !p) return;
+    const key = JSON.stringify(p.coll) + "|" + p.collPct + "|" + (state.collection || []).length;
+    if (key === PG.logKey) return;
+    PG.logKey = key;
+    const miles = state.collMilestones || [];
+    let h = `<div class="log-head"><div class="row"><strong>Collection log</strong><span class="fine">${p.collHave}/${p.collTotal} found · ${p.collPct}%</span></div><div class="bar"><i style="width:${p.collPct}%"></i></div><div class="log-miles">${miles.map((c) => `<span class="${p.collPct >= c.pct ? "on" : ""}">${c.pct}% · ${c.gold}g${c.title ? " · " + esc(c.title) : ""}</span>`).join("")}</div></div>`;
+    for (const g of state.collection || []) {
+      const base = g.items.filter((it) => !it.holder);
+      const have = base.filter((it) => (p.coll[it.id] || 0) > 0).length;
+      h += `<section class="log-group"><h3>${esc(g.name)} <span class="fine">${have}/${base.length}</span></h3><p class="fine">${esc(g.hint)}</p><div class="log-grid">`;
+      for (const it of g.items) {
+        const n = p.coll[it.id] || 0;
+        const def = state.items[it.id] || {};
+        const info = n ? `${def.name || it.id}: ${def.desc || ""} (found ${n})` : `Not found yet.${it.holder ? " A $nihala holder bonus find." : " " + g.hint}`;
+        h += `<button type="button" class="log-cell${n ? " got" : ""}${it.holder ? " holder" : ""}" data-info="${esc(info)}" aria-label="${esc(n ? def.name || it.id : "Undiscovered")}"><img class="px-icon" src="${G.iconURL("item", it.id)}" alt="">${n ? `<span class="qty">${n > 999 ? "999+" : n}</span>` : ""}<span class="log-name">${n ? esc(def.name || it.id) : "???"}</span>${it.holder ? `<span class="log-tag">holder</span>` : ""}</button>`;
+      }
+      h += `</div></section>`;
+    }
+    h += `<p class="fine">Holder finds are a bonus and don't count toward 100%. Everything else comes from normal play.</p>`;
+    box.innerHTML = h;
+  }
+  (() => {
+    const lg = $("tab-log");
+    if (lg) lg.addEventListener("click", (e) => { const c = e.target.closest && e.target.closest(".log-cell"); if (c) showExamine(c.dataset.info || "", { pin: true }); });
+  })();
+  // load the event board while the Quests tab is open
+  const _openTab = openTab;
+  openTab = function (id) {
+    _openTab(id);
+    clearInterval(PG.evTimer);
+    if (id === "quests") { if (Date.now() - PG.evAt > 20000) loadEventBoard(); PG.evTimer = setInterval(loadEventBoard, 60000); }
+  };
+  // settings popover extras: replay guide, copy share link
+  (() => {
+    const rp = $("guide-replay"), sh = $("share-link"), pop = $("sound-pop");
+    if (rp) rp.addEventListener("click", () => { if (pop) pop.hidden = true; guideReplay(); });
+    if (sh) sh.addEventListener("click", async () => {
+      const url = location.origin + "/";
+      let ok = false;
+      try { await navigator.clipboard.writeText(url); ok = true; } catch {}
+      if (!ok) { try { const ta = document.createElement("textarea"); ta.value = url; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); ok = document.execCommand("copy"); ta.remove(); } catch {} }
+      toast(ok ? "Link copied: " + url + " — share it wherever you like." : "Copy this link: " + url);
+    });
+  })();
+
   window.__nhl = {
     send,
     getState: () => state,
@@ -3359,6 +3630,9 @@
     getChance: () => ({ ch: MGC.ch, streak: MGC.streak, result: MGC.result }),
     sendHit,
     audio: () => window.NHLAudio || null,
+    guide: () => ({ step: PG.gStep, done: PG.gDone, visible: !$("guide").hidden }),
+    openTab: (id) => openTab(id),
+    loadEventBoard,
   };
 
   bootLogin().then(() => {

@@ -17,6 +17,7 @@
     "test:delta": "node test-delta-state.mjs",
     "test:aggro": "node test-mob-aggro.mjs",
     "test:minigames": "node test-minigames.mjs",
+    "test:progress": "node test-progress.mjs",
     "test:audio": "python3 test-audio.py",
     "test:playthrough": "python3 test-playthrough.py"
   },

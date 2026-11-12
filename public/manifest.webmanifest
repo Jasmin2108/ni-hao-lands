@@ -1,0 +1,16 @@
+{
+  "name": "Ni Hao Lands",
+  "short_name": "Ni Hao Lands",
+  "description": "A free, unofficial $mihao fan browser MMO. Fish, mine, cook and light the Lantern Festival with friends. Not financial advice.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a110a",
+  "theme_color": "#5a2a1c",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

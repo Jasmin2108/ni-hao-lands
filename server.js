@@ -21,6 +21,7 @@ const {
 } = world;
 const leaderboard = require("./leaderboard");
 const MG = require("./minigames");
+const PROG = require("./progress");
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -347,6 +348,8 @@ function hydrateAccount(a) {
   a.quests = normalizeQuests(a.quests);
   a.daily = a.daily && typeof a.daily === "object" ? a.daily : null;
   a.bestStreak = Math.max(0, a.bestStreak | 0);
+  a.meta = PROG.normalizeMeta(a.meta);
+  PROG.migrate(a);
   if (a.equipped && a.equipped.hat && !a.equipped.head) {
     a.equipped.head = a.equipped.hat;
     delete a.equipped.hat;
@@ -410,6 +413,7 @@ function snapshot(s) {
     quests: a.quests || normalizeQuests(null),
     daily: a.daily || null,
     bestStreak: Math.max(0, a.bestStreak | 0),
+    meta: a.meta || null,
     created: a.created,
   };
 }
@@ -558,6 +562,134 @@ function invAdd(inv, itemId, qty = 1) {
   return true;
 }
 
+// ---- progression (collection log, story, login streak, weekly event, guide) ----
+function gainItem(s, itemId, qty = 1) {
+  const ok = invAdd(s.account.inventory, itemId, qty);
+  if (ok) onCollect(s, PROG.recordCollect(s.account.meta, itemId, qty));
+  return ok;
+}
+function achv(s, title, sub) { send(s.ws, { type: "fx", kind: "achv", title, sub: sub || "", x: s.x, y: s.y, onMe: true }); }
+function onCollect(s, res) {
+  if (!res) return;
+  persist.markDirty();
+  if (res.first) {
+    const nm = ITEMS[res.id] ? ITEMS[res.id].name : res.id;
+    const m = s.account.meta;
+    achv(s, "New in your collection", `${nm}${res.holder ? " (holder bonus)" : ""} · ${PROG.collHave(m)}/${PROG.COLL_TOTAL}`);
+  }
+  for (const c of res.milestones || []) {
+    s.account.gold += c.gold;
+    leaderboard.addPeriodGold(s.account, c.gold);
+    if (c.title) grantTitle(s, c.title);
+    achv(s, `Collection ${c.pct}%`, `+${c.gold} gold${c.title ? " · title: " + c.title : ""}`);
+  }
+}
+function grantTitle(s, t) {
+  const m = s.account.meta;
+  if (!m.titles.includes(t)) m.titles.push(t);
+  m.title = t;
+  persist.markDirty();
+  broadcastState();
+}
+function currentWeek(s) { return (TEST_HOOKS && s && s.testWeek) || leaderboard.isoWeekId(); }
+function currentDay(s) { return (TEST_HOOKS && s && s.testDay) || MG.dayKey(); }
+// Called from every gameplay counter (dailyBump); opts carry details like timing quality.
+function progressBump(s, id, n, opts) {
+  opts = opts || {};
+  const m = s.account.meta, acc = s.account;
+  let changed = false;
+  const stat = id === "smith" && opts.verb === "smelt" ? "smelt" : id;
+  changed = PROG.storyEvent(m, acc, { type: "count", stat, n }) || changed;
+  if (id === "fish" && opts.item === "raw_minnow") changed = PROG.storyEvent(m, acc, { type: "count", stat: "minnow", n: 1 }) || changed;
+  if (id === "kill" && opts.mobKind === "hound") changed = PROG.storyEvent(m, acc, { type: "count", stat: "hound", n: 1 }) || changed;
+  let evId = null, pts = 0;
+  if (id === "fish") { evId = "fishing"; pts = opts.good ? 2 : 1; }
+  else if (id === "ore") { evId = "ore"; pts = n; }
+  else if (id === "cook") { evId = "cook"; pts = opts.quality === "perfect" ? 3 : opts.quality === "fine" ? 2 : 1; }
+  else if (id === "logs") { evId = "woods"; pts = n + (opts.good ? 1 : 0); }
+  if (evId) {
+    const before = (m.event && m.event.score) || 0;
+    const hits = PROG.eventScore(m, currentWeek(s), evId, pts);
+    if (m.event.score !== before) changed = true;
+    for (const t of hits) {
+      s.account.gold += t.gold;
+      leaderboard.addPeriodGold(s.account, t.gold);
+      if (t.xp && t.skill) giveXp(s, t.skill, t.xp);
+      if (t.title) grantTitle(s, t.title);
+      const ev = PROG.eventFor(currentWeek(s));
+      achv(s, `${ev.name} · ${t.pts} points`, `+${t.gold} gold${t.xp ? ` · +${t.xp} xp` : ""}${t.title ? " · title: " + t.title : ""}`);
+    }
+    eventBoardCache = null;
+  }
+  if (changed) persist.markDirty();
+}
+function storyNotify(s, res) {
+  if (!res) return false;
+  if (res.completed) {
+    const ch = res.completed, r = ch.reward;
+    s.account.gold += r.gold || 0;
+    leaderboard.addPeriodGold(s.account, r.gold || 0);
+    for (const [sk, amt] of Object.entries(r.xp || {})) giveXp(s, sk, amt);
+    if (r.item) gainItem(s, r.item, 1);
+    if (r.title) grantTitle(s, r.title);
+    persist.markDirty();
+    toast(s, ch.finish);
+    achv(s, `Chapter ${ch.n} complete: ${ch.name}`, `+${r.gold} gold${r.item ? " · " + ITEMS[r.item].name : ""}${r.title ? " · title: " + r.title : ""}`);
+    const next = PROG.storyChapter(s.account.meta);
+    if (next) toast(s, `Next chapter: ${next.name} — ${next.intro}`);
+    PROG.storyEvent(s.account.meta, s.account, { type: "visit", zone: zoneAt(s.x, s.y).id });
+    send(s.ws, { type: "open", panel: "quests" });
+    return true;
+  }
+  if (res.waiting) { toast(s, `Lantern Festival: first ${res.waiting[0].charAt(0).toLowerCase() + res.waiting[0].slice(1)}.`); return false; }
+  if (res.progressed) persist.markDirty();
+  return false;
+}
+function storyVisit(s, zoneId) {
+  if (PROG.storyEvent(s.account.meta, s.account, { type: "visit", zone: zoneId })) { persist.markDirty(); send(s.ws, { type: "me", me: mePayload(s) }); }
+}
+function loginCheck(s) {
+  const r = PROG.loginTick(s.account.meta, currentDay(s));
+  if (!r) return;
+  s.account.gold += r.gold;
+  leaderboard.addPeriodGold(s.account, r.gold);
+  if (r.item) gainItem(s, r.item, 1);
+  persist.markDirty();
+  achv(s, r.streak > 1 ? `Welcome back! Day ${r.streak} visit streak` : "Daily visit bonus", `+${r.gold} gold${r.item ? " · River Pearl" : ""}${r.kept ? " · a skipped day didn't break it" : r.streak > 1 ? "" : " · come back tomorrow for a little more"}`);
+  send(s.ws, { type: "me", me: mePayload(s) });
+}
+function progressPayload(s) {
+  const m = s.account.meta;
+  const week = currentWeek(s);
+  const { ev, st } = PROG.eventState(m, week);
+  return {
+    guide: m.guide,
+    coll: m.coll,
+    collPct: PROG.collPct(m),
+    collHave: PROG.collHave(m),
+    collTotal: PROG.COLL_TOTAL,
+    story: { ch: m.story.ch, done: m.story.done, objectives: m.story.ch < PROG.STORY.length ? PROG.storyPayload(m, s.account)[m.story.ch].objectives : [] },
+    login: { ...m.login, next: PROG.loginReward(m.login.streak + 1) },
+    event: { week, id: ev.id, name: ev.name, desc: ev.desc, score: st.score, claimed: st.claimed },
+    titles: m.titles,
+    title: m.title,
+  };
+}
+// weekly event leaderboard (cached; hidden test names never shown)
+let eventBoardCache = null;
+function eventBoard(week) {
+  if (eventBoardCache && eventBoardCache.week === week && Date.now() - eventBoardCache.at < 15000) return eventBoardCache.rows;
+  const rows = [];
+  for (const a of persist.allAccounts()) {
+    const e = a.meta && a.meta.event;
+    if (!e || e.week !== week || !(e.score > 0) || leaderboard.isHiddenName(a.name)) continue;
+    rows.push({ id: a.id, name: a.name, avatar: a.avatar, score: e.score, title: (a.meta && a.meta.title) || "" });
+  }
+  rows.sort((x, y) => y.score - x.score || String(x.name).localeCompare(String(y.name)));
+  eventBoardCache = { week, at: Date.now(), rows };
+  return rows;
+}
+
 // Quest hand-ins accept fine / perfect variants of an item; plain ones are used up first.
 function variantIds(itemId) { return [itemId, itemId + "_fine", itemId + "_perfect"].filter((id) => ITEMS[id]); }
 function invCountAny(inv, itemId) { return variantIds(itemId).reduce((t, id) => t + invCount(inv, id), 0); }
@@ -596,6 +728,7 @@ function publicPlayer(s) {
     hp: s.hp,
     maxHp: PLAYER_HP,
     equipped: s.account.equipped,
+    title: (s.account.meta && s.account.meta.title) || "",
     action: s.action ? s.action.kind : null,
     holder: !!s.holderBadge,
     nihala: isNihalaHolder(s),
@@ -631,6 +764,7 @@ function mePayload(s) {
     bestStreak: s.account.bestStreak || 0,
     daily: dailyPayload(s),
     graceUntil: s.graceUntil && s.graceUntil > Date.now() ? s.graceUntil - Date.now() : 0,
+    progress: progressPayload(s),
   };
 }
 
@@ -653,8 +787,9 @@ function dailyPayload(s) {
     tasks: todaysTasks().tasks.map((t) => ({ id: t.id, label: t.label, goal: t.goal, gold: t.gold, xp: t.xp, prog: Math.min(t.goal, d.prog[t.id] || 0), done: !!d.done[t.id] })),
   };
 }
-function dailyBump(s, id, n = 1) {
+function dailyBump(s, id, n = 1, opts) {
   if (!n) return;
+  progressBump(s, id, n, opts);
   const d = dailyState(s);
   const task = todaysTasks().tasks.find((t) => t.id === id);
   if (!task || d.done[id]) return;
@@ -723,7 +858,7 @@ function claimHolderTool(s, itemId) {
   if (!HOLDER_TOOLS.includes(itemId)) { toast(s, "That isn't a holder tool."); return; }
   if (!isNihalaHolder(s)) { toast(s, "Holder tools need a wallet sign-in holding $nihala."); return; }
   if (ownsItem(s.account, itemId)) { toast(s, `You already have the ${ITEMS[itemId].name}.`); return; }
-  if (!invAdd(s.account.inventory, itemId, 1)) { toast(s, "Your inventory is full."); return; }
+  if (!gainItem(s, itemId, 1)) { toast(s, "Your inventory is full."); return; }
   toast(s, `You receive the ${ITEMS[itemId].name}. Holder perk, in-game only.`);
   send(s.ws, { type: "me", me: mePayload(s) });
 }
@@ -732,7 +867,7 @@ function rollHolderDrop(s, node) {
   if (!isNihalaHolder(s)) return null;
   const drop = HOLDER_DROPS[node.skill];
   if (!drop || Math.random() >= NIHALA_RARE_CHANCE) return null;
-  if (!invAdd(s.account.inventory, drop, 1)) return null;
+  if (!gainItem(s, drop, 1)) return null;
   if (drop === "raw_lucky_koi") {
     // a bigger golden koi; kept off the fish leaderboard so it stays fair
     const kg = Math.round(rollFishKg("golden_koi") * 1.15 * 10) / 10;
@@ -785,7 +920,7 @@ const DELTA_RADIUS = 26;
 const FACE_CODE = { down: 0, up: 1, left: 2, right: 3 };
 function playerPosKey(pp) { return pp.x + "," + pp.y + "," + pp.facing + "," + (pp.action || "") + "," + pp.hp; }
 function playerRestKey(pp) {
-  return JSON.stringify([pp.name, pp.avatar, pp.zone, pp.maxHp, pp.equipped, pp.holder, pp.nihala, pp.premiumName, pp.wallet, pp.walletLabel, pp.combatLevel]);
+  return JSON.stringify([pp.name, pp.avatar, pp.zone, pp.maxHp, pp.equipped, pp.holder, pp.nihala, pp.premiumName, pp.wallet, pp.walletLabel, pp.combatLevel, pp.title]);
 }
 function flushState() {
   stateDirty = false;
@@ -895,6 +1030,7 @@ function cancelAction(s) {
 function skillLevelOf(account, skill) {
   return levelFromXp((account.skills && account.skills[skill]) || 0).level;
 }
+PROG.setLevelFn(skillLevelOf);
 
 function invHasRoom(inv, itemId) {
   if (inv.length < INV_SIZE) return true;
@@ -1018,7 +1154,7 @@ function talkQuest(s, npc) {
     s.account.gold += reward.gold;
     leaderboard.addPeriodGold(s.account, reward.gold);
   }
-  if (reward.item) invAdd(s.account.inventory, reward.item, 1);
+  if (reward.item) gainItem(s, reward.item, 1);
   if (reward.xp) {
     for (const [sk, amt] of Object.entries(reward.xp)) giveXp(s, sk, amt);
   }
@@ -1041,7 +1177,10 @@ function interact(s, targetId, extra) {
       else if (npc.role === "shop") send(s.ws, { type: "open", panel: "shop" });
       else if (npc.role === "cook") toast(s, "Click the cooking range to cook raw fish.");
       else if (npc.role === "smith") toast(s, "Use the furnace to smelt ore, then the anvil to smith bars into tools.");
-      const quested = talkQuest(s, npc);
+      const story = PROG.storyTalk(s.account.meta, s.account, npc.id);
+      const storyDone = storyNotify(s, story);
+      const quested = storyDone || talkQuest(s, npc) || !!(story && (story.waiting || story.progressed));
+      if (story) send(s.ws, { type: "me", me: mePayload(s) });
       if (!quested && npc.role !== "bank" && npc.role !== "shop" && npc.role !== "cook" && npc.role !== "smith") {
         toast(s, "你好，朋友. Grind, bank, and be kind.");
       }
@@ -1064,6 +1203,15 @@ function interact(s, targetId, extra) {
   }
 }
 
+// Players route around zones they haven't unlocked instead of being refused when the straight route crosses one.
+function canEnterFn(s) {
+  const cache = new Map();
+  return (x, y) => {
+    const z = zoneAt(x, y);
+    if (!cache.has(z.id)) cache.set(z.id, !zoneBlocked(z, s.account));
+    return cache.get(z.id);
+  };
+}
 function pathBlockedFor(s, path) {
   for (const step of path) {
     const err = zoneBlocked(zoneAt(step.x, step.y), s.account);
@@ -1090,7 +1238,7 @@ function walkThen(s, tx, ty, cb) {
   if (!dest) { toast(s, "Can't reach that."); return; }
   const gate = zoneBlocked(zoneAt(dest.x, dest.y), s.account);
   if (gate) { toast(s, gate); return; }
-  const path = pathfind(tiles, s.x, s.y, dest.x, dest.y);
+  const path = pathfind(tiles, s.x, s.y, dest.x, dest.y, 1200, canEnterFn(s));
   if (!path.length) { toast(s, "No path."); return; }
   const blocked = pathBlockedFor(s, path);
   if (blocked) { toast(s, blocked); return; }
@@ -1115,6 +1263,7 @@ function rawFishOptions(account) {
 function beginNode(s, node, extra) {
   extra = extra || {};
   if (node.type === "board") {
+    if (PROG.storyEvent(s.account.meta, s.account, { type: "board" })) persist.markDirty();
     const d = dailyPayload(s);
     const left = d.tasks.filter((t) => !t.done).length;
     toast(s, left ? `Daily tasks: ${left} left today. Rewards are paid automatically.` : "All daily tasks done today. New ones at 00:00 UTC.");
@@ -1173,7 +1322,7 @@ function finishGather(s, node) {
   const good = !!(bonus && bonus.ok);
   const err = canStartGather(s, node);
   if (err) { toast(s, err); cancelAction(s); return; }
-  if (!invAdd(s.account.inventory, node.item, 1)) {
+  if (!gainItem(s, node.item, 1)) {
     toast(s, "Your inventory is full.");
     cancelAction(s);
     return;
@@ -1183,7 +1332,7 @@ function finishGather(s, node) {
   let xp = node.xp || 20;
   let note = `You get ${item ? item.name : node.item}.`;
   const extras = [];
-  const addExtra = (id, qty = 1) => { let got = 0; for (let i = 0; i < qty; i++) if (invAdd(s.account.inventory, id, 1)) got++; if (got) extras.push(got > 1 ? `${got}× ${ITEMS[id] ? ITEMS[id].name : id}` : (ITEMS[id] ? ITEMS[id].name : id)); return got; };
+  const addExtra = (id, qty = 1) => { let got = 0; for (let i = 0; i < qty; i++) if (gainItem(s, id, 1)) got++; if (got) extras.push(got > 1 ? `${got}× ${ITEMS[id] ? ITEMS[id].name : id}` : (ITEMS[id] ? ITEMS[id].name : id)); return got; };
   let shower = false, rareFind = false;
   const sk = node.skill;
   if ((node.item && String(node.item).startsWith("raw_")) || node.type === "fish") {
@@ -1203,7 +1352,7 @@ function finishGather(s, node) {
       if (t === "old_boot") note += " ...and an old boot. Classic.";
       else rareFind = true;
     }
-    dailyBump(s, "fish", 1);
+    dailyBump(s, "fish", 1, { good, item: node.item });
   } else if (sk === "mining") {
     if (good) {
       xp *= 1.5;
@@ -1223,7 +1372,7 @@ function finishGather(s, node) {
     }
     if (Math.random() < 0.025) { addExtra("bird_nest", 1); rareFind = true; }
     else if (Math.random() < 0.03) addExtra("tree_seed", 1);
-    dailyBump(s, "logs", logs);
+    dailyBump(s, "logs", logs, { good });
   } else if (sk === "yarn") {
     if (Math.random() < 0.06) { addExtra(pickWeighted([["rose_yarn", 40], ["sky_yarn", 40], ["rainbow_yarn", 20]]), 1); rareFind = true; }
     dailyBump(s, "yarn", 1);
@@ -1350,7 +1499,7 @@ function finishCook(s) {
   // Burnt food only on a badly-timed tap while still low level for that fish; AFK cooking never burns.
   const burnt = q === "poor" && lvlDelta < 10 && Math.random() < 0.6;
   const outId = burnt ? "burnt_fish" : (q === "fine" || q === "perfect") && ITEMS[raw.cook + "_" + q] ? raw.cook + "_" + q : raw.cook;
-  if (!invAdd(s.account.inventory, outId, 1)) {
+  if (!gainItem(s, outId, 1)) {
     invAdd(s.account.inventory, rawId, 1);
     toast(s, "Your inventory is full.");
     cancelAction(s);
@@ -1364,7 +1513,7 @@ function finishCook(s) {
     const mult = q === "perfect" ? 1.5 : q === "fine" ? 1.2 : 1;
     giveXp(s, "cooking", Math.round((raw.cookXp || 24) * mult * (q === "fine" || q === "perfect" ? MG.comboMult(s.streak) : 1)));
     toast(s, `You cook ${ITEMS[outId] ? ITEMS[outId].name : outId}.${q === "perfect" ? " Perfect!" : q === "fine" ? " Nicely done." : ""}`);
-    dailyBump(s, "cook", 1);
+    dailyBump(s, "cook", 1, { quality: q });
     send(s.ws, { type: "fx", kind: "craft", quality: q || "normal", x: s.x, y: s.y, onMe: true });
   }
   send(s.ws, { type: "me", me: mePayload(s) });
@@ -1394,14 +1543,14 @@ function finishCraft(s, list, verb) {
   if (s.action) s.action.bonus = null;
   const q = verb === "smith" && bonus && (bonus.quality === "fine" || bonus.quality === "perfect") ? bonus.quality : null;
   const outId = q && ITEMS[recipe.product + "_" + q] ? recipe.product + "_" + q : recipe.product;
-  if (!invAdd(s.account.inventory, outId, 1)) {
+  if (!gainItem(s, outId, 1)) {
     restoreInputs(s.account, recipe);
     toast(s, "Your inventory is full.");
     cancelAction(s);
     return;
   }
   giveXp(s, "smithing", Math.round((recipe.xp || 20) * (q === "perfect" ? 1.5 : q === "fine" ? 1.2 : 1) * (q ? MG.comboMult(s.streak) : 1)));
-  dailyBump(s, "smith", 1);
+  dailyBump(s, "smith", 1, { verb });
   const def = ITEMS[outId];
   toast(s, `You ${verb} a ${def ? def.name : outId}.${q === "perfect" ? " Perfect strike!" : q === "fine" ? " Fine work." : ""}`);
   send(s.ws, { type: "fx", kind: "craft", verb, quality: q || "normal", x: s.x, y: s.y, onMe: true });
@@ -1442,7 +1591,7 @@ function combatTick(s, now) {
     mob.hp = 0;
     mob.respawnAt = now + 20000 + (mob.level || 1) * 800;
     giveXp(s, "combat", mob.xp || 30);
-    dailyBump(s, "kill", 1);
+    dailyBump(s, "kill", 1, { mobKind: mob.kind });
     s.account.kills = (s.account.kills || 0) + 1;
     leaderboard.addPeriodKill(s.account);
     const lo = Array.isArray(mob.gold) ? mob.gold[0] : 5;
@@ -1451,7 +1600,7 @@ function combatTick(s, now) {
     s.account.gold += gold;
     leaderboard.addPeriodGold(s.account, gold);
     const drop = mob.drop || "bones";
-    invAdd(s.account.inventory, drop, 1);
+    gainItem(s, drop, 1);
     const dropName = ITEMS[drop] ? ITEMS[drop].name : drop;
     toast(s, `The ${mob.name} is defeated. +${gold} gold, ${dropName}.`);
     cancelAction(s);
@@ -1670,6 +1819,10 @@ function welcomePayload(s) {
     mobs: compactMobs(),
     chatLog: chatLog.slice(-40),
     quests: QUESTS.map((q) => ({ id: q.id, name: q.name, steps: q.steps, giver: q.giver })),
+    story: PROG.STORY.map((c) => ({ id: c.id, n: c.n, name: c.name, zone: c.zone, intro: c.intro, objectives: c.objectives.map((o) => ({ type: o.type, label: o.label, final: !!o.final, n: o.n || 1, skill: o.skill || null, npc: o.npc || null })), reward: c.reward })),
+    collection: PROG.COLLECTION.map((g) => ({ id: g.id, name: g.name, hint: g.hint, items: g.items.map((id) => ({ id, holder: PROG.HOLDER_ONLY.has(id) })) })),
+    collMilestones: PROG.COLL_MILESTONES,
+    eventTiers: PROG.EVENT_TIERS,
     smeltRecipes: SMELT_RECIPES,
     smithRecipes: SMITH_RECIPES,
   };
@@ -1736,6 +1889,8 @@ function onHello(ws, msg) {
   live.proto = msg.proto === 2 ? 2 : 1;
   if (account.wallet) live.wallet = account.wallet;
   send(ws, welcomePayload(live));
+  loginCheck(live);
+  storyVisit(live, zoneAt(live.x, live.y).id);
   systemChat(`${account.name} has arrived in Ni Hao Village.`);
   if (account.wallet) refreshNihala(live);
   broadcastState();
@@ -1815,7 +1970,11 @@ function testHook(s, msg) {
   else if (op === "tp") { s.x = msg.x | 0; s.y = msg.y | 0; s.path = []; broadcastState(); }
   else if (op === "rate") s.testChanceRate = Number(msg.rate);
   else if (op === "skill") { s.account.skills[String(msg.skill)] = Math.max(0, msg.xp | 0); send(s.ws, { type: "me", me: mePayload(s) }); }
-  else if (op === "give") { invAdd(s.account.inventory, String(msg.item), Math.max(1, msg.qty | 0)); send(s.ws, { type: "me", me: mePayload(s) }); }
+  else if (op === "day") { s.testDay = String(msg.day || ""); loginCheck(s); }
+  else if (op === "week") { s.testWeek = String(msg.week || ""); send(s.ws, { type: "me", me: mePayload(s) }); }
+  else if (op === "bump") { dailyBump(s, String(msg.id), Math.max(1, msg.n | 0), msg.opts || {}); send(s.ws, { type: "me", me: mePayload(s) }); }
+  else if (op === "meta") { send(s.ws, { type: "__meta", meta: s.account.meta }); }
+  else if (op === "give") { gainItem(s, String(msg.item), Math.max(1, msg.qty | 0)); send(s.ws, { type: "me", me: mePayload(s) }); }
   else if (op === "mobs") {
     const now = Date.now();
     send(s.ws, {
@@ -1844,7 +2003,7 @@ function onMessage(ws, raw) {
       if (!isWalkable(tiles, x, y)) { toast(s, "You can't walk there."); return; }
       const gate = zoneBlocked(zoneAt(x, y), s.account);
       if (gate) { toast(s, gate); return; }
-      const planned = pathfind(tiles, s.x, s.y, x, y);
+      const planned = pathfind(tiles, s.x, s.y, x, y, 1200, canEnterFn(s));
       const blocked = planned.length ? pathBlockedFor(s, planned) : null;
       if (blocked) { toast(s, blocked); return; }
       cancelAction(s);
@@ -1859,6 +2018,21 @@ function onMessage(ws, raw) {
     case "step":
       handleStep(s, msg);
       break;
+    case "guide": {
+      const g = s.account.meta.guide;
+      if (msg.op === "step") g.step = Math.max(0, Math.min(10, msg.step | 0));
+      else if (msg.op === "done") { g.done = true; g.step = 0; }
+      else if (msg.op === "reset") { g.done = false; g.step = 0; }
+      persist.markDirty();
+      send(s.ws, { type: "me", me: mePayload(s) });
+      break;
+    }
+    case "setTitle": {
+      const t = String(msg.title || "");
+      const m = s.account.meta;
+      if (t === "" || m.titles.includes(t)) { m.title = t; persist.markDirty(); send(s.ws, { type: "me", me: mePayload(s) }); broadcastState(); }
+      break;
+    }
     case "hit":
       onHit(s, msg.id | 0);
       break;
@@ -1987,6 +2161,7 @@ function tick(dt, now) {
         s.lastZone = z.id;
         toast(s, `Entering ${z.name}`);
         send(s.ws, { type: "zone", zone: z });
+        storyVisit(s, z.id);
       }
     }
 
@@ -2116,6 +2291,21 @@ app.get("/avatars/:id", async (req, res) => {
   }
 });
 
+app.get("/api/event", (req, res) => {
+  const week = leaderboard.isoWeekId();
+  const ev = PROG.eventFor(week);
+  const rows = eventBoard(week);
+  const viewer = String(req.query.viewer || "");
+  const acct = viewer ? persist.getByToken(viewer) : null;
+  const youIdx = acct ? rows.findIndex((r) => r.id === acct.id) : -1;
+  res.set("Cache-Control", "no-store");
+  res.json({
+    week, event: ev, tiers: PROG.EVENT_TIERS, resets: "Monday 00:00 Helsinki",
+    top: rows.slice(0, 10).map((r, i) => ({ rank: i + 1, name: r.name, avatar: r.avatar, score: r.score, title: r.title })),
+    you: youIdx >= 0 ? { rank: youIdx + 1, score: rows[youIdx].score } : null,
+    players: rows.length,
+  });
+});
 app.get("/api/leaderboard", (req, res) => {
   const board = String(req.query.board || "");
   const period = String(req.query.period || "all");
@@ -2427,6 +2617,8 @@ async function main() {
     const now = Date.now();
     for (const s of sessions.values()) { s.pingT = now; send(s.ws, { type: "ping", t: now }); }
   }, 4000);
+  // day rollover while online: daily visit bonus
+  setInterval(() => { for (const s of sessions.values()) if (s.account) loginCheck(s); }, 60000);
   // periodic $nihala re-check for online wallet players (perks pause when the balance hits 0)
   setInterval(() => {
     const now = Date.now();

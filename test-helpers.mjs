@@ -16,10 +16,10 @@ async function freePort(start) {
     if (ok) return p;
   }
 }
-export async function startServer(prefix, portBase) {
+export async function startServer(prefix, portBase, extraEnv = {}) {
   const port = await freePort(portBase);
   const dataDir = await mkdtemp(path.join(tmpdir(), prefix));
-  const srv = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", DATA_DIR: dataDir, DATABASE_URL: "", NHL_TEST_HOOKS: "1" }, stdio: "ignore" });
+  const srv = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", DATA_DIR: dataDir, DATABASE_URL: "", NHL_TEST_HOOKS: "1", ...extraEnv }, stdio: "ignore" });
   const base = "http://127.0.0.1:" + port;
   for (let i = 0; i < 80; i++) { try { if ((await fetch(base + "/health")).ok) break; } catch {} await sleep(150); }
   return { base, stop: async () => { srv.kill("SIGTERM"); await sleep(300); await rm(dataDir, { recursive: true, force: true }); } };

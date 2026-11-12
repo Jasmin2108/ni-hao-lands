@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <script>
+    (function () {
+      try {
+        if (window.__cherry || /(?:^|[?&])cherry_embed=1(?:&|$)/.test(location.search)) {
+          document.documentElement.classList.add("inside-cherry");
+        }
+      } catch (e) {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Ni Hao Lands — free unofficial $mihao fan MMO</title>
   <meta name="description" content="Ni Hao Lands is a free, unofficial pixel-art browser MMO for the $mihao community. Fish, mine, cook and follow the Lantern Festival story with friends. Not financial advice." />
@@ -35,8 +44,13 @@
     html, body { margin: 0; background: #1a110a; color: #f4e6c4; font-family: "Trebuchet MS", system-ui, sans-serif; }
     body:not(.css-ready) #login > *, body:not(.css-ready) #game { visibility: hidden; }
     body:not(.css-ready)::before { content: "Ni Hao Lands"; position: fixed; inset: 0; display: grid; place-items: center; font: 800 28px "Trebuchet MS", sans-serif; color: #ffd36a; letter-spacing: .04em; text-shadow: 0 3px 0 #6b1d14; }
+    html.inside-cherry #wallet-signin,
+    html.inside-cherry #connect-wallet,
+    html.inside-cherry #wallet-deeplinks,
+    html.inside-cherry #login .or-line { display: none !important; }
   </style>
   <link rel="stylesheet" href="/styles.css" onload="document.body && document.body.classList.add('css-ready')" />
+  <script src="/cherry-boot.js"></script>
 </head>
 <body>
   <script>if (document.styleSheets.length > 1) document.body.classList.add("css-ready"); setTimeout(function () { document.body.classList.add("css-ready"); }, 2500);</script>
@@ -45,6 +59,7 @@
       <p class="eyebrow">你好，朋友 · unofficial fan world</p>
       <h1>Ni Hao Lands</h1>
       <p class="tagline">A RuneScape-style hangout for the $mihao movement. Grind fish, yarn, and ore. Talk in the village. No real-money shop.</p>
+      <p id="cherry-entering" class="fine">Signing you in with Cherry… Nothing leaves your wallet.</p>
       <label>Adventurer name
         <input id="name" maxlength="16" placeholder="e.g. HaoFriend" autocomplete="off" />
       </label>

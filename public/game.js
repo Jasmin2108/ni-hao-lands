@@ -2489,9 +2489,14 @@
     return cands.find((p) => p && typeof p.signMessage === "function") || null;
   }
 
+  function insideCherry() {
+    return !!(window.__nhlCherry && window.__nhlCherry.embedded);
+  }
+
   function setWalletDeepLinks(show) {
     const box = $("wallet-deeplinks");
     if (!box) return;
+    if (insideCherry()) show = false;
     box.hidden = !show;
     if (!show) return;
     const page = location.href.split("#")[0];
@@ -2796,6 +2801,20 @@
   });
 
   $("connect-wallet").addEventListener("click", connectWallet);
+
+  (async function startInsideCherry() {
+    if (!insideCherry()) return;
+    document.documentElement.classList.add("inside-cherry");
+    try {
+      const result = await window.__nhlCherry.ready;
+      const j = result && result.session;
+      if (!j || !j.token) throw new Error("Cherry sign-in did not return a session.");
+      if (j.name && $("name")) $("name").value = j.name;
+      connect({ type: "hello", name: j.name, token: j.token });
+    } catch (err) {
+      showLoginError(err.message || "Cherry sign-in failed.");
+    }
+  })();
 
   if ($("zoom-in")) $("zoom-in").addEventListener("click", () => setZoom((state.zoom || 1) + 0.15));
   if ($("zoom-out")) $("zoom-out").addEventListener("click", () => setZoom((state.zoom || 1) - 0.15));

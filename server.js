@@ -6,6 +6,7 @@ const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
 const express = require("express");
+const { verifyLaunchToken, LaunchTokenError } = require("@cherrydotfun/miniapp-sdk");
 const { WebSocketServer } = require("ws");
 const nacl = require("tweetnacl");
 const bs58 = require("bs58");
@@ -24,6 +25,9 @@ const MG = require("./minigames");
 const PROG = require("./progress");
 
 const PORT = Number(process.env.PORT || 3000);
+const CHERRY_APP_ID = process.env.CHERRY_APP_ID || "9fac6fde-1424-40ea-98db-680c3d724931";
+const CHERRY_TEST_JWKS = process.env.CHERRY_TEST_JWKS ? JSON.parse(process.env.CHERRY_TEST_JWKS) : null;
+
 const HOST = process.env.HOST || "0.0.0.0";
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
 const SAVE_FILE = path.join(DATA_DIR, "players.json");
@@ -360,10 +364,11 @@ function hydrateAccount(a) {
   return a;
 }
 
-function createAccount({ name, avatar, wallet }) {
+function createAccount({ name, avatar, wallet, cherryId }) {
   return persist.upsertAccount(hydrateAccount({
     id: persist.newAccountId(),
     wallet: wallet || null,
+    cherryId: cherryId || null,
     name: String(name).slice(0, 16),
     avatar: resolveAvatar(avatar),
     x: staticWorld.spawn.x,
@@ -399,6 +404,7 @@ function snapshot(s) {
   return {
     id: a.id,
     wallet: a.wallet || null,
+    cherryId: a.cherryId || null,
     name: a.name,
     avatar: a.avatar,
     x: s.x,
@@ -2502,6 +2508,69 @@ app.post("/api/auth/wallet", (req, res) => {
     linked,
     needsName: needsNamePick(account),
     note: "Signature only logged you in. No transaction was created or sent.",
+  });
+});
+
+async function verifyCherryLaunchToken(token) {
+  const opts = { appId: CHERRY_APP_ID };
+  if (CHERRY_TEST_JWKS) opts.jwks = CHERRY_TEST_JWKS;
+  return verifyLaunchToken(token, opts);
+}
+
+function accountFromCherryClaims(claims) {
+  const cherryId = claims.cherry_id ? String(claims.cherry_id) : null;
+  const wallet = String(claims.payment_wallet || claims.sub || "").trim();
+  if (!isSolanaPubkey(wallet)) return { error: "Launch token did not name a Solana wallet." };
+  let account = cherryId ? persist.getByCherryId(cherryId) : null;
+  if (!account) account = persist.getByWallet(wallet);
+  if (account) {
+    if (cherryId && !account.cherryId) account.cherryId = cherryId;
+    account.wallet = wallet;
+    persist.upsertAccount(account);
+  } else {
+    account = createAccount({
+      name: uniqueWalletName("", wallet),
+      avatar: "classic-paw",
+      wallet,
+      cherryId,
+    });
+  }
+  return { account, wallet, cherryId };
+}
+
+app.post("/api/auth/cherry", async (req, res) => {
+  if (hitWindow(authByIp, clientIp(req), 60000, 30)) {
+    return res.status(429).json({ error: "Too many sign-in attempts. Wait a moment." });
+  }
+  const raw = String(req.headers.authorization || "");
+  const token = raw.startsWith("Bearer ") ? raw.slice(7).trim() : "";
+  if (!token) return res.status(401).json({ error: "Missing Cherry launch token." });
+  let claims;
+  try {
+    claims = await verifyCherryLaunchToken(token);
+  } catch (err) {
+    if (err instanceof LaunchTokenError && err.code === "JWKS_UNAVAILABLE") {
+      return res.status(503).json({ error: "Cherry sign-in is briefly unavailable. Please try again." });
+    }
+    const code = err instanceof LaunchTokenError ? err.code : "INVALID_TOKEN";
+    return res.status(401).json({ error: "Cherry sign-in failed.", code });
+  }
+  const got = accountFromCherryClaims(claims);
+  if (got.error) return res.status(400).json({ error: got.error });
+  const { account, wallet } = got;
+  const sess = persist.issueSession(account.id, { expire: true });
+  persist.markDirty();
+  saveAccounts();
+  res.json({
+    ok: true,
+    token: sess.token,
+    expires: sess.expires,
+    name: account.name,
+    avatar: resolveAvatar(account.avatar),
+    wallet,
+    walletLabel: shortWallet(wallet),
+    needsName: needsNamePick(account),
+    note: "Signed in with Cherry. No transaction was created or sent.",
   });
 });
 

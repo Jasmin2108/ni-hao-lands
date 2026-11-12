@@ -76,6 +76,15 @@ function getByWallet(wallet) {
   return null;
 }
 
+function getByCherryId(cherryId) {
+  if (!cherryId) return null;
+  const id = String(cherryId);
+  for (const a of accountsById.values()) {
+    if (a.cherryId && a.cherryId === id) return a;
+  }
+  return null;
+}
+
 function getByName(name) {
   if (!name) return null;
   const lower = String(name).toLowerCase();
@@ -272,6 +281,7 @@ function ingestAccount(p) {
   const account = {
     id,
     wallet: p.wallet || null,
+    cherryId: p.cherryId || (p.stats && p.stats.cherryId) || (p.meta && p.meta.cherryId) || null,
     name: String(p.name).slice(0, 16),
     avatar: p.avatar || "classic-paw",
     x: Number.isFinite(p.x) ? p.x : 0,
@@ -452,7 +462,7 @@ async function saveToPostgres() {
           a.id, a.wallet || null, a.name, a.avatar, a.x, a.y, a.gold, a.hp,
           JSON.stringify(a.skills || {}), JSON.stringify(a.inventory || []),
           JSON.stringify(a.bank || {}), JSON.stringify(a.equipped || {}),
-          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0), periods: a.periods || null, lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0), quests: a.quests || null, daily: a.daily || null, bestStreak: Math.max(0, a.bestStreak | 0), meta: a.meta || null }),
+          JSON.stringify({ biggestFish: Math.max(0, Number(a.biggestFish) || 0), kills: Math.max(0, a.kills | 0), periods: a.periods || null, lastRenamedAt: Math.max(0, Number(a.lastRenamedAt) || 0), quests: a.quests || null, daily: a.daily || null, bestStreak: Math.max(0, a.bestStreak | 0), meta: a.meta || null, cherryId: a.cherryId || null }),
           a.created || Date.now(), Date.now(),
         ]
       );
@@ -509,6 +519,7 @@ module.exports = {
   getByToken,
   getSession,
   getByWallet,
+  getByCherryId,
   getByName,
   nameTaken,
   newAccountId,

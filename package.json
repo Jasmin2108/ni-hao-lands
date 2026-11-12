@@ -15,6 +15,7 @@
     "test:move": "node test-move-intents.mjs",
     "test:nihala": "node test-nihala-holder.mjs",
     "test:csp": "node test-csp.mjs",
+    "test:cherry": "node test-cherry-auth.mjs",
     "test:delta": "node test-delta-state.mjs",
     "test:aggro": "node test-mob-aggro.mjs",
     "test:minigames": "node test-minigames.mjs",
@@ -26,6 +27,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@cherrydotfun/miniapp-sdk": "^0.1.24",
     "bs58": "^5.0.0",
     "express": "^4.21.2",
     "pg": "^8.23.1",

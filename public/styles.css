@@ -696,3 +696,20 @@ body.guide-on #toasts { top: calc(var(--guide-h, 120px) + 22px); }
   #guide p { font-size: 12.5px; }
   #guide button { min-height: 40px; }
 }
+
+
+/* Cherry mini-app: hide connect/login controls; the host already has the wallet. */
+#cherry-entering { display: none; }
+html.inside-cherry #cherry-entering { display: block !important; margin: 12px 0 0; }
+html.inside-cherry #login label,
+html.inside-cherry #login .pick-label,
+html.inside-cherry #login #avatar-grid,
+html.inside-cherry #login .upload-row,
+html.inside-cherry #login #enter,
+html.inside-cherry #login #wallet-signin,
+html.inside-cherry #login .or-line,
+html.inside-cherry #login #wallet-deeplinks,
+html.inside-cherry #login .fine:not(#cherry-entering),
+html.inside-cherry #connect-wallet {
+  display: none !important;
+}

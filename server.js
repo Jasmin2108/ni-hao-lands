@@ -2342,6 +2342,14 @@ function tick(dt, now) {
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
+// Cherry can embed the game; other sites cannot. See frame-ancestors from cherry.fun.
+app.use((_req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "frame-ancestors 'self' https://chat.cherry.fun https://cherry.fun https://*.cherry.fun"
+  );
+  next();
+});
 app.post("/api/avatar", express.json({ limit: "120kb" }), handleAvatarUpload);
 app.use(express.json({ limit: "32kb" }));
 app.use("/assets", express.static(path.join(__dirname, "assets"), { maxAge: "1h" }));
